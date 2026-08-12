@@ -1,0 +1,391 @@
+"""Draft board state and live sync with drafting platforms."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import requests
+
+from . import names, sources
+from .config import CURRENT_SEASON, STATE_DIR, LeagueSettings
+
+# Name handling lives in names.py so every join in the codebase resolves identically.
+norm_name = names.normalize
+
+_INDEX_CACHE: dict[str, names.PlayerIndex] = {}
+
+
+def _board_fingerprint(table: pd.DataFrame) -> str:
+    """Cheap content signature. Keying on id() would be wrong as well as slow —
+    CPython recycles ids, so a rebuilt board can land on a freed id and get served
+    a stale index belonging to a different set of players."""
+    if "name" not in table.columns or table.empty:
+        return f"empty:{len(table)}"
+    names_col = table["name"]
+    return f"{len(table)}:{hash(names_col.iloc[0])}:{hash(names_col.iloc[-1])}"
+
+
+def player_index(table: pd.DataFrame) -> names.PlayerIndex:
+    """Alias index for a board, cached on the board's contents."""
+    key = _board_fingerprint(table)
+    idx = _INDEX_CACHE.get(key)
+    if idx is None:
+        idx = names.PlayerIndex(table)
+        _INDEX_CACHE.clear()   # only one board is live at a time
+        _INDEX_CACHE[key] = idx
+    return idx
+
+
+def match_player(query: str, table: pd.DataFrame,
+                 position: str | None = None) -> pd.Series | None:
+    """Resolve a free-text name to a row, tolerating nicknames, suffixes and typos."""
+    row, _ = player_index(table).resolve(query, position)
+    return row
+
+
+def match_player_verbose(query: str, table: pd.DataFrame,
+                         position: str | None = None) -> tuple[pd.Series | None, str]:
+    """Same, but also reports how the match was made."""
+    return player_index(table).resolve(query, position)
+
+
+# ---------------------------------------------------------------- ADP
+
+FANTASYPROS_ADP = {
+    "half_ppr": "https://www.fantasypros.com/nfl/adp/half-point-ppr-overall.php",
+    "ppr": "https://www.fantasypros.com/nfl/adp/ppr-overall.php",
+    "standard": "https://www.fantasypros.com/nfl/adp/overall.php",
+}
+
+
+def load_adp(fmt: str = "half_ppr", csv_path: str | None = None,
+             season: int = CURRENT_SEASON, superflex: bool = False) -> pd.DataFrame:
+    """Draft-cost estimates, in order of preference.
+
+    1. A CSV you export from your own platform — always best, because ADP is
+       league- and format-specific and your room is what you're drafting against.
+    2. FantasyPros preseason expert consensus rank, mirrored by dynastyprocess as a
+       parquet going back to 2019. This is the reliable path: a direct data file
+       rather than an HTML page that changes layout and blocks scripted requests.
+    3. FantasyPros' live HTML page, as a last resort.
+    """
+    if csv_path:
+        df = pd.read_csv(csv_path)
+        cols = {c.lower().strip(): c for c in df.columns}
+        name_c = next((cols[c] for c in ("name", "player", "player_name") if c in cols), None)
+        adp_c = next((cols[c] for c in ("adp", "avg", "average", "rank") if c in cols), None)
+        if not name_c or not adp_c:
+            raise ValueError("ADP CSV needs a name column and an adp column")
+        out = df[[name_c, adp_c]].rename(columns={name_c: "name", adp_c: "adp"})
+        out["adp"] = pd.to_numeric(out["adp"], errors="coerce")
+        out["_key"] = out["name"].map(norm_name)
+        out["source"] = "csv"
+        return out.dropna(subset=["adp"])
+
+    try:
+        from .adp import preseason_ecr
+        ecr = preseason_ecr(season, superflex=superflex)
+        if not ecr.empty:
+            ecr = ecr[["name", "position", "adp", "_key"]].copy()
+            ecr["source"] = "fantasypros_ecr_superflex" if superflex else "fantasypros_ecr"
+            return ecr
+    except Exception as exc:
+        print(f"ECR history unavailable ({type(exc).__name__}); trying live page")
+
+    url = FANTASYPROS_ADP.get(fmt, FANTASYPROS_ADP["half_ppr"])
+    resp = requests.get(url, timeout=20, headers={
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+    })
+    resp.raise_for_status()
+    tables = pd.read_html(resp.text)
+    df = max(tables, key=len)
+    cols = {str(c).lower(): c for c in df.columns}
+    name_c = next((cols[c] for c in cols if "player" in c), df.columns[1])
+    adp_c = next((cols[c] for c in cols if c in ("avg", "avg.", "adp")), df.columns[-1])
+    out = df[[name_c, adp_c]].copy()
+    out.columns = ["name", "adp"]
+    # FantasyPros appends team and bye to the name cell.
+    out["name"] = out["name"].astype(str).str.replace(r"\s*\([^)]*\)", "", regex=True)
+    out["name"] = out["name"].str.replace(r"\s+[A-Z]{2,3}\s*\(?\d*\)?$", "", regex=True).str.strip()
+    out["adp"] = pd.to_numeric(out["adp"], errors="coerce")
+    out["_key"] = out["name"].map(norm_name)
+    out["source"] = "fantasypros_html"
+    return out.dropna(subset=["adp"])
+
+
+# Typical 12-team draft position by positional rank, as adp = a * rank^b.
+# Fitted to the shape of real half-PPR boards. This matters because draft rooms do
+# not draft in value order: QBs and TEs slide well past their raw value, and using
+# model rank as a stand-in for ADP would assume the room agrees with the model —
+# which would make the whole opportunity-cost calculation circular.
+# How much of the pure points-arithmetic shift to apply when converting consensus
+# rankings between scoring formats. Below 1.0 because draft rooms price things the
+# format doesn't change — consistency, positional scarcity, name recognition.
+FORMAT_SHIFT_DAMPING = 0.6
+
+SYNTHETIC_ADP_CURVE = {
+    "RB": (2.00, 1.12),
+    "WR": (2.80, 1.03),
+    "TE": (18.0, 0.80),
+    "QB": (22.0, 0.68),
+}
+
+
+def synthetic_adp(position: str, pos_rank: float) -> float:
+    a, b = SYNTHETIC_ADP_CURVE.get(position, (3.0, 1.05))
+    return float(a * max(1.0, pos_rank) ** b)
+
+
+def attach_adp(board: pd.DataFrame, adp: pd.DataFrame | None) -> pd.DataFrame:
+    """Join ADP onto the board, falling back to positional draft curves where missing."""
+    b = board.copy()
+    b["_key"] = b["name"].map(norm_name)
+    if adp is not None and not adp.empty:
+        b = b.merge(adp[["_key", "adp"]].drop_duplicates("_key"), on="_key", how="left")
+        b["adp_source"] = np.where(b["adp"].notna(), "consensus", "modelled")
+    else:
+        b["adp"] = np.nan
+        b["adp_source"] = "modelled"
+
+    fallback = [synthetic_adp(p, r) for p, r in zip(b["position"], b["pos_rank"])]
+    b["adp"] = b["adp"].fillna(pd.Series(fallback, index=b.index))
+    b["adp_delta"] = b["adp"] - b["overall_rank"]
+    return b
+
+
+def convert_adp_format(board: pd.DataFrame, scoring_label: str) -> pd.DataFrame:
+    """Shift PPR consensus rankings into this league's scoring format.
+
+    Published consensus is full PPR — that is the only overall redraft ranking
+    FantasyPros publishes. Feeding it straight into a half-PPR or standard league
+    misprices exactly the players the format is about: a back who catches 60 passes
+    is worth far less without a full point per reception, while a touchdown-dependent
+    early-down back becomes relatively more valuable.
+
+    The market ranking stays the anchor, because it encodes talent, situation and
+    injury news no model captures. Only the format delta is applied, and that delta
+    is arithmetic rather than opinion: half PPR is PPR minus half a point per catch,
+    and each player's reception volume comes from his own projection. The adjustment
+    is expressed as a shift in rank positions so it composes cleanly with ADP.
+    """
+    b = board.copy()
+    b["adp_format"] = scoring_label
+    if scoring_label == "ppr" or "proj_points_ppr" not in b.columns:
+        return b
+
+    rank_ppr = b["proj_points_ppr"].rank(ascending=False, method="min")
+    rank_fmt = b["proj_points"].rank(ascending=False, method="min")
+    # Positive shift = this format devalues him relative to PPR, so he goes later.
+    #
+    # Damped rather than applied whole. The raw rank delta is what pure points
+    # arithmetic implies, but real draft rooms move less than that: they also price
+    # consistency, positional scarcity and name recognition, none of which change
+    # with the scoring format. Undamped, Derrick Henry went from ADP 38 to 1.0 in
+    # standard — right direction, absurd magnitude.
+    b["adp_shift"] = (rank_fmt - rank_ppr).fillna(0.0) * FORMAT_SHIFT_DAMPING
+    b["adp_ppr"] = b["adp"]
+    b["adp"] = (b["adp"] + b["adp_shift"]).clip(lower=1.0)
+    b["adp_delta"] = b["adp"] - b["overall_rank"]
+    return b
+
+
+# ---------------------------------------------------------------- draft state
+
+class DraftState:
+    """Who's been taken, by whom, and whose turn it is.
+
+    State is stored per league, so two drafts running in different leagues never
+    read each other's picks.
+    """
+
+    def __init__(self, league: LeagueSettings, name: str | None = None):
+        self.league = league
+        key = re.sub(r"[^A-Za-z0-9_-]", "_", name or league.name or "default")
+        self.path = STATE_DIR / f"draft_{key}.json"
+        self.picks: list[dict] = []
+        # Your slot comes from the league config, always. Reading it back from the
+        # saved draft file meant reconfiguring to pick 11 and still being advised
+        # for pick 6, because the stale value won.
+        self.my_slot = league.draft_slot
+        if self.path.exists():
+            raw = json.loads(self.path.read_text())
+            self.picks = raw.get("picks", [])
+            # Picks recorded under a different league size describe a different
+            # draft entirely; discard rather than misinterpret them.
+            if raw.get("teams") not in (None, league.teams):
+                self.picks = []
+
+    def save(self) -> None:
+        self.path.write_text(json.dumps({
+            "picks": self.picks, "my_slot": self.my_slot,
+            "teams": self.league.teams, "league": self.league.name,
+            "updated": time.time(),
+        }, indent=2))
+
+    # -- mutation
+    def record(self, player_name: str, overall: int | None = None,
+               team_slot: int | None = None, player_id: str | None = None) -> dict:
+        overall = overall or (len(self.picks) + 1)
+        slot = team_slot if team_slot is not None else self.slot_for_pick(overall)
+        pick = {"overall": overall, "slot": slot, "name": player_name, "player_id": player_id}
+        self.picks = [p for p in self.picks if p["overall"] != overall] + [pick]
+        self.picks.sort(key=lambda p: p["overall"])
+        self.save()
+        return pick
+
+    def undo(self) -> dict | None:
+        if not self.picks:
+            return None
+        p = self.picks.pop()
+        self.save()
+        return p
+
+    def reset(self) -> None:
+        self.picks = []
+        self.save()
+
+    # -- queries
+    def slot_for_pick(self, overall: int) -> int:
+        t = self.league.teams
+        rnd = (overall - 1) // t + 1
+        idx = (overall - 1) % t + 1
+        return (t - idx + 1) if (self.league.snake and rnd % 2 == 0) else idx
+
+    @property
+    def on_the_clock(self) -> int:
+        return len(self.picks) + 1
+
+    def my_picks(self) -> list[int]:
+        return self.league.picks_for_slot(self.my_slot)
+
+    def next_pick_for_me(self, after: int | None = None) -> int | None:
+        after = after or self.on_the_clock
+        upcoming = [p for p in self.my_picks() if p >= after]
+        return upcoming[0] if upcoming else None
+
+    def pick_after_next(self) -> int | None:
+        nxt = self.next_pick_for_me()
+        if nxt is None:
+            return None
+        later = [p for p in self.my_picks() if p > nxt]
+        return later[0] if later else None
+
+    def taken_keys(self) -> set[str]:
+        return {norm_name(p["name"]) for p in self.picks}
+
+    def my_roster(self, board: pd.DataFrame) -> dict[str, int]:
+        mine = [p for p in self.picks if p["slot"] == self.my_slot]
+        counts: dict[str, int] = {}
+        idx = board.set_index("_key")["position"].to_dict() if "_key" in board.columns else {}
+        for p in mine:
+            pos = idx.get(norm_name(p["name"]))
+            if pos:
+                counts[pos] = counts.get(pos, 0) + 1
+        return counts
+
+    def summary(self) -> dict:
+        return {
+            "picks_made": len(self.picks),
+            "on_the_clock": self.on_the_clock,
+            "round": (self.on_the_clock - 1) // self.league.teams + 1,
+            "my_slot": self.my_slot,
+            "my_next_pick": self.next_pick_for_me(),
+            "picks_until_my_turn": max(0, (self.next_pick_for_me() or 0) - self.on_the_clock),
+        }
+
+
+# ---------------------------------------------------------------- platform sync
+
+def _id_crosswalk() -> pd.DataFrame:
+    """gsis_id <-> espn_id / sleeper_id, from nflverse rosters."""
+    r = sources.weekly_rosters()
+    keep = [c for c in ("gsis_id", "espn_id", "sleeper_id", "full_name", "position") if c in r.columns]
+    x = r[keep].dropna(subset=["gsis_id"]).drop_duplicates("gsis_id")
+    for c in ("espn_id", "sleeper_id"):
+        if c in x.columns:
+            x[c] = x[c].astype("string").str.replace(r"\.0$", "", regex=True)
+    return x
+
+
+def sync_sleeper(draft_id: str) -> list[dict]:
+    """Pull picks from a Sleeper draft. Sleeper's draft API is public — no auth needed."""
+    url = f"https://api.sleeper.app/v1/draft/{draft_id}/picks"
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    xwalk = _id_crosswalk().set_index("sleeper_id")["full_name"].to_dict()
+    out = []
+    for p in resp.json():
+        meta = p.get("metadata") or {}
+        name = " ".join(filter(None, [meta.get("first_name"), meta.get("last_name")])).strip()
+        name = name or xwalk.get(str(p.get("player_id")), "")
+        out.append({
+            "overall": p.get("pick_no"),
+            "slot": p.get("draft_slot"),
+            "name": name,
+            "player_id": None,
+            "position": meta.get("position"),
+        })
+    return sorted([o for o in out if o["name"]], key=lambda o: o["overall"] or 0)
+
+
+def sync_espn(league_id: str, season: int = CURRENT_SEASON,
+              swid: str | None = None, espn_s2: str | None = None) -> list[dict]:
+    """Pull picks from an ESPN league's draft detail endpoint.
+
+    Public leagues work with no credentials. Private leagues need the SWID and
+    espn_s2 cookies from a logged-in browser session, passed here or set as the
+    ESPN_SWID / ESPN_S2 environment variables.
+    """
+    swid = swid or os.environ.get("ESPN_SWID")
+    espn_s2 = espn_s2 or os.environ.get("ESPN_S2")
+    url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
+           f"/segments/0/leagues/{league_id}")
+    cookies = {}
+    if swid and espn_s2:
+        cookies = {"SWID": swid if swid.startswith("{") else "{%s}" % swid, "espn_s2": espn_s2}
+    resp = requests.get(url, params={"view": ["mDraftDetail", "mTeam", "kona_player_info"]},
+                        cookies=cookies, timeout=20,
+                        headers={"User-Agent": "ffdraft-mcp/1.0"})
+    resp.raise_for_status()
+    data = resp.json()
+    picks = (data.get("draftDetail") or {}).get("picks") or []
+
+    xwalk = _id_crosswalk()
+    espn_map = xwalk.dropna(subset=["espn_id"]).set_index("espn_id")["full_name"].to_dict()
+    out = []
+    for p in picks:
+        pid = str(p.get("playerId"))
+        out.append({
+            "overall": p.get("overallPickNumber"),
+            "slot": None,
+            "name": espn_map.get(pid, f"ESPN#{pid}"),
+            "player_id": None,
+        })
+    return sorted([o for o in out if o["overall"]], key=lambda o: o["overall"])
+
+
+def parse_pasted_board(text: str) -> list[str]:
+    """Best-effort parse of a pasted list of drafted players.
+
+    Handles the shapes people actually paste: numbered lists, 'Round 3, Pick 7 - Name',
+    comma-separated runs, and raw one-per-line names.
+    """
+    names = []
+    for chunk in re.split(r"[\n,;]+", text):
+        s = chunk.strip()
+        if not s:
+            continue
+        s = re.sub(r"^\s*(?:R?\d+[.):]|\d+\.\d+|round\s*\d+[,\s]*pick\s*\d+)\s*[-–—:]?\s*", "",
+                   s, flags=re.I)
+        s = re.sub(r"\s*[-–—(]\s*(QB|RB|WR|TE|K|D/?ST|DEF)\b.*$", "", s, flags=re.I)
+        s = re.sub(r"\s+[A-Z]{2,3}$", "", s).strip()
+        if len(s) > 2 and re.search(r"[A-Za-z]{2,}\s+[A-Za-z]{2,}", s):
+            names.append(s)
+    return names

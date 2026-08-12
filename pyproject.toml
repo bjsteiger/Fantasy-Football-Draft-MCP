@@ -1,0 +1,25 @@
+[project]
+name = "ffdraft-mcp"
+version = "1.0.0"
+description = "Live fantasy football draft analyst as an MCP server"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp>=1.2.0",
+  "pandas>=2.0",
+  "numpy>=1.24",
+  "pyarrow>=14.0",
+  "requests>=2.31",
+  "lxml>=5.0",
+  "html5lib>=1.1",
+  "beautifulsoup4>=4.12",
+]
+
+[project.scripts]
+ffdraft-mcp = "ffdraft.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

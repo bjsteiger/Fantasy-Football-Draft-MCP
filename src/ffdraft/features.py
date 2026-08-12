@@ -1,0 +1,456 @@
+"""Derived features. Everything is computed from raw plays and box scores rather than
+scraped from someone's published ranking table — the numbers stay reproducible and
+don't break when a website changes its HTML.
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from . import sources
+from .config import (
+    AGE_CLIFF, AGE_DECAY, FANTASY_POSITIONS, RECENCY_WEIGHTS, SEASONS,
+    SPIKE_THRESHOLD, STARTABLE_THRESHOLD, Scoring, WORKLOAD_BURDEN,
+)
+
+
+# ---------------------------------------------------------------- scoring
+
+def fantasy_points(df: pd.DataFrame, sc: Scoring, te_bonus: float = 0.0) -> pd.Series:
+    """Apply league scoring to weekly box-score rows."""
+    g = lambda c: df[c].fillna(0) if c in df.columns else 0.0  # noqa: E731
+    pts = (
+        g("passing_yards") * sc.pass_yd
+        + g("passing_tds") * sc.pass_td
+        + g("interceptions") * sc.interception
+        + g("rushing_yards") * sc.rush_yd
+        + g("rushing_tds") * sc.rush_td
+        + g("receptions") * sc.rec
+        + g("receiving_yards") * sc.rec_yd
+        + g("receiving_tds") * sc.rec_td
+        + (g("rushing_fumbles_lost") + g("receiving_fumbles_lost") + g("sack_fumbles_lost"))
+        * sc.fumble_lost
+        + (g("passing_2pt_conversions") + g("rushing_2pt_conversions")
+           + g("receiving_2pt_conversions")) * sc.two_pt
+    )
+    if te_bonus and "position" in df.columns:
+        pts = pts + np.where(df["position"].eq("TE"), g("receptions") * te_bonus, 0.0)
+    return pts
+
+
+# Derived team frames are pure functions of the cached play-by-play, but each one
+# costs a full pass over ~250k rows. Several tools ask for the same frame, so the
+# results are memoised for the process lifetime.
+_DERIVED: dict[str, pd.DataFrame] = {}
+
+
+def clear_derived_cache() -> None:
+    _DERIVED.clear()
+
+
+def _memo(key: str, builder):
+    if key not in _DERIVED:
+        _DERIVED[key] = builder()
+    return _DERIVED[key]
+
+
+def _zscore(s: pd.Series) -> pd.Series:
+    sd = s.std(ddof=0)
+    return (s - s.mean()) / sd if sd and sd > 0 else pd.Series(0.0, index=s.index)
+
+
+def _season_weights(seasons: list[int]) -> dict[int, float]:
+    """Recency weights aligned to however many seasons actually loaded."""
+    seasons = sorted(seasons)
+    w = RECENCY_WEIGHTS[-len(seasons):]
+    total = sum(w)
+    return {s: wi / total for s, wi in zip(seasons, w)}
+
+
+# ---------------------------------------------------------------- team environment
+
+def team_pace_and_split(pbp: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Plays per game, run/pass split, and neutral-script pass rate by team-season.
+
+    Neutral script = win probability between 20% and 80%, which strips out
+    garbage-time pass volume and kneel-down run volume. That matters: a team's
+    raw pass rate mostly tells you whether they were losing.
+    """
+    if pbp is None:
+        return _memo("pace", lambda: _team_pace_and_split(sources.play_by_play()))
+    return _team_pace_and_split(pbp)
+
+
+def _team_pace_and_split(pbp: pd.DataFrame) -> pd.DataFrame:
+    off = pbp[pbp["posteam"].notna() & pbp["play_type"].isin(["pass", "run"])].copy()
+
+    grp = off.groupby(["season", "posteam"])
+    base = grp.agg(
+        plays=("play_type", "size"),
+        games=("game_id", "nunique"),
+        pass_plays=("pass", "sum"),
+        rush_plays=("rush", "sum"),
+        off_epa=("epa", "mean"),
+    ).reset_index()
+
+    neutral = off[off["wp"].between(0.2, 0.8)]
+    neu = neutral.groupby(["season", "posteam"]).agg(
+        neutral_plays=("play_type", "size"),
+        neutral_pass=("pass", "sum"),
+    ).reset_index()
+
+    out = base.merge(neu, on=["season", "posteam"], how="left")
+    out["plays_per_game"] = out["plays"] / out["games"].clip(lower=1)
+    out["pass_rate"] = out["pass_plays"] / out["plays"].clip(lower=1)
+    out["rush_rate"] = 1 - out["pass_rate"]
+    out["neutral_pass_rate"] = out["neutral_pass"] / out["neutral_plays"].clip(lower=1)
+    return out.rename(columns={"posteam": "team"})
+
+
+def oline_ratings(pbp: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Offensive line quality, split into run block and pass block.
+
+    Run block uses Adjusted Line Yards: rushing yards are credited to the line on a
+    sliding scale, because the line owns the first few yards and the back owns the
+    breakaway. Pass block uses pressure allowed (sacks + QB hits) per dropback.
+    """
+    if pbp is None:
+        return _memo("oline", lambda: _oline_ratings(sources.play_by_play()))
+    return _oline_ratings(pbp)
+
+
+def _oline_ratings(pbp: pd.DataFrame) -> pd.DataFrame:
+
+    # --- run block: adjusted line yards
+    runs = pbp[(pbp["play_type"] == "run") & pbp["posteam"].notna()].copy()
+    y = runs["yards_gained"].fillna(0)
+    aly = np.select(
+        [y < 0, y <= 4, y <= 10],
+        [y * 1.2, y * 1.0, 4 + (y - 4) * 0.5],
+        default=4 + 6 * 0.5,  # yards past 10 are the back, not the line
+    )
+    runs["aly"] = aly
+    runs["stuffed"] = (y <= 0).astype(float)
+    run_g = runs.groupby(["season", "posteam"]).agg(
+        adj_line_yards=("aly", "mean"),
+        stuff_rate=("stuffed", "mean"),
+        rush_epa=("epa", "mean"),
+    ).reset_index()
+
+    # --- pass block: pressure allowed per dropback
+    drops = pbp[(pbp["play_type"].isin(["pass", "run"])) & (pbp["pass"] == 1)
+                & pbp["posteam"].notna()].copy()
+    pass_g = drops.groupby(["season", "posteam"]).agg(
+        sack_rate=("sack", "mean"),
+        hit_rate=("qb_hit", "mean"),
+        pass_epa=("epa", "mean"),
+    ).reset_index()
+
+    ol = run_g.merge(pass_g, on=["season", "posteam"], how="outer").rename(
+        columns={"posteam": "team"}
+    )
+
+    # Per-season z-scores so a rating means "relative to that year's league".
+    for season, chunk in ol.groupby("season"):
+        idx = chunk.index
+        run_score = _zscore(chunk["adj_line_yards"]) - _zscore(chunk["stuff_rate"])
+        pass_score = -_zscore(chunk["sack_rate"]) - _zscore(chunk["hit_rate"])
+        ol.loc[idx, "run_block_z"] = (run_score / 2).values
+        ol.loc[idx, "pass_block_z"] = (pass_score / 2).values
+    ol["run_block_rank"] = ol.groupby("season")["run_block_z"].rank(ascending=False).astype(int)
+    ol["pass_block_rank"] = ol.groupby("season")["pass_block_z"].rank(ascending=False).astype(int)
+    return ol
+
+
+def defense_ratings(pbp: pd.DataFrame | None = None,
+                    weekly: pd.DataFrame | None = None,
+                    sc: Scoring | None = None) -> pd.DataFrame:
+    """Defensive strength by team-season, overall and by position defended.
+
+    Two views: EPA allowed (how good the defense actually is) and fantasy points
+    allowed per game to each position (what it costs the players you'd draft).
+    The second is what 'RB rankings against opposing teams' really means.
+    """
+    if pbp is None and weekly is None:
+        _sc = sc or Scoring()
+        # Key on the scoring values, not id(): CPython reuses ids after garbage
+        # collection, so an id-keyed cache can silently serve another league's numbers.
+        key = "defense_" + ",".join(f"{k}={v}" for k, v in sorted(vars(_sc).items()))
+        return _memo(key, lambda: _defense_ratings(
+            sources.play_by_play(), sources.weekly_stats(), _sc))
+    return _defense_ratings(
+        sources.play_by_play() if pbp is None else pbp,
+        sources.weekly_stats() if weekly is None else weekly,
+        sc or Scoring(),
+    )
+
+
+def _defense_ratings(pbp: pd.DataFrame, weekly: pd.DataFrame, sc: Scoring) -> pd.DataFrame:
+    d = pbp[pbp["defteam"].notna() & pbp["play_type"].isin(["pass", "run"])]
+    # Split pass and rush before grouping. The obvious version passes a lambda that
+    # indexes back into the parent frame with .loc for every group, which is an O(n)
+    # lookup repeated once per team-season.
+    base = d.groupby(["season", "defteam"], observed=True)["epa"].mean()
+    ep = d[d["pass"] == 1].groupby(["season", "defteam"], observed=True)["epa"].mean()
+    er = d[d["rush"] == 1].groupby(["season", "defteam"], observed=True)["epa"].mean()
+    epa = pd.concat([
+        base.rename("def_epa_play"), ep.rename("def_epa_pass"), er.rename("def_epa_rush"),
+    ], axis=1).reset_index().rename(columns={"defteam": "team"})
+
+    # Fantasy points allowed per game by position.
+    w = weekly[weekly["position"].isin(FANTASY_POSITIONS)].copy()
+    w["fp"] = fantasy_points(w, sc)
+    fpa = (
+        w.groupby(["season", "opponent_team", "position", "week"])["fp"].sum()
+        .groupby(level=["season", "opponent_team", "position"]).mean()
+        .reset_index().rename(columns={"opponent_team": "team", "fp": "fpa_per_game"})
+    )
+    fpa_wide = fpa.pivot_table(index=["season", "team"], columns="position",
+                               values="fpa_per_game").reset_index()
+    fpa_wide.columns.name = None
+    fpa_wide = fpa_wide.rename(columns={p: f"fpa_{p}" for p in FANTASY_POSITIONS})
+
+    out = epa.merge(fpa_wide, on=["season", "team"], how="outer")
+    for pos in FANTASY_POSITIONS:
+        col = f"fpa_{pos}"
+        if col in out.columns:
+            # Rank 1 = toughest defense against that position.
+            out[f"{col}_rank"] = out.groupby("season")[col].rank(method="min").astype("Int64")
+    out["def_rank"] = out.groupby("season")["def_epa_play"].rank(method="min").astype("Int64")
+    return out
+
+
+def strength_of_schedule(target_season: int, defense: pd.DataFrame) -> pd.DataFrame:
+    key = f"sos_{target_season}_{len(defense)}"
+    if key in _DERIVED:
+        return _DERIVED[key]
+    out = _strength_of_schedule(target_season, defense)
+    _DERIVED[key] = out
+    return out
+
+
+def _strength_of_schedule(target_season: int, defense: pd.DataFrame) -> pd.DataFrame:
+    """Per-team schedule difficulty for the upcoming season, by position defended.
+
+    Opponent quality is a recency-weighted blend of that defense's last few years,
+    which is far more stable than last season alone. Divisional games are counted
+    separately because you face those six defenses twice — they carry double weight
+    and they're the matchups you can least escape.
+    """
+    sched = sources.schedules()
+    games = sched[sched["season"] == target_season]
+    if games.empty:  # schedule not published yet — fall back to last known season
+        target_season = int(sched["season"].max())
+        games = sched[sched["season"] == target_season]
+
+    # Recency-weighted defensive profile per team.
+    hist = defense[defense["season"] < target_season].copy()
+    if hist.empty:
+        hist = defense.copy()
+    wmap = _season_weights(sorted(hist["season"].unique()))
+    hist["w"] = hist["season"].map(wmap).fillna(0)
+    val_cols = [c for c in hist.columns if c.startswith("fpa_") and not c.endswith("_rank")]
+    val_cols += ["def_epa_play"]
+    h = hist.copy()
+    num, den = {}, {}
+    for c in val_cols:
+        h[f"_n_{c}"] = h[c].fillna(h[c].mean()) * h["w"]
+        num[f"_n_{c}"] = "sum"
+    h["_w"] = h["w"]
+    num["_w"] = "sum"
+    agg = h.groupby("team", observed=True).agg(num)
+    prof = pd.DataFrame({"team": agg.index})
+    for c in val_cols:
+        prof[c] = (agg[f"_n_{c}"] / agg["_w"].replace(0, np.nan)).to_numpy()
+
+    rows = []
+    for _, gm in games.iterrows():
+        rows.append({"team": gm["home_team"], "opp": gm["away_team"], "div": gm.get("div_game", 0)})
+        rows.append({"team": gm["away_team"], "opp": gm["home_team"], "div": gm.get("div_game", 0)})
+    sos = pd.DataFrame(rows).merge(prof, left_on="opp", right_on="team",
+                                   how="left", suffixes=("", "_o")).drop(columns=["team_o"])
+
+    agg = {c: "mean" for c in val_cols}
+    agg["div"] = "sum"
+    out = sos.groupby("team").agg(agg).reset_index()
+    out = out.rename(columns={c: f"sos_{c}" for c in val_cols})
+    out = out.rename(columns={"div": "divisional_games"})
+    out["season"] = target_season
+    # Positive = easier schedule (opponents allow more fantasy points).
+    for pos in FANTASY_POSITIONS:
+        c = f"sos_fpa_{pos}"
+        if c in out.columns:
+            out[f"sos_{pos}_z"] = _zscore(out[c])
+    return out
+
+
+# ---------------------------------------------------------------- player level
+
+def player_season_profiles(sc: Scoring, te_bonus: float = 0.0) -> pd.DataFrame:
+    """Per-player, per-season production, role and week-to-week consistency."""
+    key = "profiles_" + ",".join(f"{k}={v}" for k, v in sorted(vars(sc).items())) + f"|{te_bonus}"
+    if key in _DERIVED:
+        return _DERIVED[key]
+    out = _player_season_profiles(sc, te_bonus)
+    _DERIVED[key] = out
+    return out
+
+
+def _player_season_profiles(sc: Scoring, te_bonus: float = 0.0) -> pd.DataFrame:
+    w = sources.weekly_stats()
+    w = w[w["position"].isin(FANTASY_POSITIONS) & (w["season_type"] == "REG")].copy()
+    w["fp"] = fantasy_points(w, sc, te_bonus)
+
+    thresh = w["position"].map(STARTABLE_THRESHOLD)
+    spike = w["position"].map(SPIKE_THRESHOLD)
+    w["startable"] = (w["fp"] >= thresh).astype(float)
+    w["spike"] = (w["fp"] >= spike).astype(float)
+    w["touches"] = w.get("carries", 0).fillna(0) + w.get("targets", 0).fillna(0)
+
+    prof = w.groupby(["player_id", "player_display_name", "position", "season"]).agg(
+        games=("week", "nunique"),
+        fp_total=("fp", "sum"),
+        fp_mean=("fp", "mean"),
+        fp_sd=("fp", "std"),
+        fp_median=("fp", "median"),
+        startable_rate=("startable", "mean"),
+        spike_rate=("spike", "mean"),
+        touches=("touches", "sum"),
+        targets=("targets", "sum"),
+        rec_per_game=("receptions", "mean"),
+        carries=("carries", "sum"),
+        target_share=("target_share", "mean"),
+        team=("recent_team", "last"),
+    ).reset_index()
+
+    # Floor: mean of the worst 40% of weeks. Ceiling: mean of the best 20%.
+    # Computed with ranks rather than sorting each player-season separately, which
+    # meant thousands of small sorts for a result one grouped pass can produce.
+    ws = w[["player_id", "season", "fp"]].copy()
+    grp = ws.groupby(["player_id", "season"], observed=True)["fp"]
+    n = grp.transform("size")
+    pct = grp.rank(method="first", pct=True)
+    ws["is_floor"] = pct <= 0.4
+    ws["is_ceiling"] = pct > 0.8
+    # Single-game seasons have no meaningful tail, so keep the one value in both.
+    ws.loc[n <= 1, ["is_floor", "is_ceiling"]] = True
+    # Mask into separate columns and take grouped means. An apply over the groups
+    # does the same arithmetic but pays Python-level indexing on every one of them,
+    # which dominated the whole build.
+    ws["fp_floor"] = ws["fp"].where(ws["is_floor"])
+    ws["fp_ceiling"] = ws["fp"].where(ws["is_ceiling"])
+    tails = ws.groupby(["player_id", "season"], observed=True).agg(
+        floor=("fp_floor", "mean"),
+        ceiling=("fp_ceiling", "mean"),
+    ).reset_index()
+    prof = prof.merge(tails, on=["player_id", "season"], how="left")
+
+    # Snap share — the cleanest read on role, independent of touchdown luck.
+    try:
+        snaps = sources.snap_counts()
+        snaps = snaps[snaps["game_type"] == "REG"]
+        sn = snaps.groupby(["player", "season"])["offense_pct"].mean().reset_index()
+        prof = prof.merge(sn, left_on=["player_display_name", "season"],
+                          right_on=["player", "season"], how="left").drop(columns=["player"])
+        prof = prof.rename(columns={"offense_pct": "snap_share"})
+    except Exception:
+        prof["snap_share"] = np.nan
+
+    prof["fp_cv"] = prof["fp_sd"] / prof["fp_mean"].replace(0, np.nan)
+    return prof
+
+
+def injury_risk(profiles: pd.DataFrame) -> pd.DataFrame:
+    """Likelihood of missing time, from availability history plus workload burden.
+
+    Three inputs, because each catches something the others miss:
+      1. games missed relative to a 17-game season, recency-weighted
+      2. how often they showed up on injury reports even when they played
+      3. workload burden — seasons of heavy touch volume, which is a
+         well-documented leading indicator for backs especially
+    """
+    inj = sources.injuries()
+    rosters = sources.weekly_rosters()
+
+    wmap = _season_weights(sorted(profiles["season"].unique()))
+    p = profiles.copy()
+    p["w"] = p["season"].map(wmap).fillna(0)
+
+    # 1. Availability, recency-weighted. Done as vectorised sums rather than a
+    # per-player apply: the apply recomputed the season-weight table once for every
+    # player on the board, which was the single slowest step in the whole build.
+    p["avail"] = (p["games"] / 17).clip(0, 1)
+    p["avail_w"] = p["avail"] * p["w"]
+    g = p.groupby(["player_id", "position"], observed=True).agg(
+        seasons=("season", "nunique"),
+        _num=("avail_w", "sum"),
+        _den=("w", "sum"),
+    ).reset_index()
+    g["games_missed_rate"] = 1 - (g["_num"] / g["_den"].replace(0, np.nan))
+    avail = g.drop(columns=["_num", "_den"])
+
+    # 2. Injury-report burden: weeks listed with any game-status designation.
+    if not inj.empty:
+        inj = inj.copy()
+        inj["flagged"] = inj["report_status"].notna().astype(float)
+        rep = inj.groupby("gsis_id").agg(
+            report_weeks=("flagged", "sum"),
+            report_seasons=("season", "nunique"),
+        ).reset_index()
+        rep["report_rate"] = (rep["report_weeks"] / (rep["report_seasons"] * 17)).clip(0, 1)
+        avail = avail.merge(rep[["gsis_id", "report_rate"]], left_on="player_id",
+                            right_on="gsis_id", how="left").drop(columns=["gsis_id"])
+    avail["report_rate"] = avail.get("report_rate", pd.Series(dtype=float)).fillna(0.15)
+
+    # 3. Workload burden: seasons above the positional touch threshold, recency-weighted.
+    p["burden_line"] = p["position"].map(WORKLOAD_BURDEN)
+    p["over_burden"] = (p["touches"] > p["burden_line"]).astype(float)
+    p["burden_ratio"] = (p["touches"] / p["burden_line"]).clip(0, 2)
+    p["burden_w"] = p["burden_ratio"] * p["w"]
+    bg = p.groupby("player_id", observed=True).agg(
+        heavy_seasons=("over_burden", "sum"),
+        _bnum=("burden_w", "sum"),
+        _bden=("w", "sum"),
+    ).reset_index()
+    bg["recent_burden"] = bg["_bnum"] / bg["_bden"].replace(0, np.nan)
+    burden = bg.drop(columns=["_bnum", "_bden"])
+    avail = avail.merge(burden, on="player_id", how="left")
+
+    # Age, needed for the RB-specific burden interaction.
+    ages = rosters.sort_values("week").groupby("gsis_id").agg(
+        birth_date=("birth_date", "last"), season=("season", "max"),
+    ).reset_index()
+    ages["age"] = (pd.to_datetime(f"{int(ages['season'].max())}-09-01")
+                   - pd.to_datetime(ages["birth_date"], errors="coerce")).dt.days / 365.25
+    avail = avail.merge(ages[["gsis_id", "age"]], left_on="player_id",
+                        right_on="gsis_id", how="left").drop(columns=["gsis_id"])
+
+    # Blend into a single 0-1 risk score. Backs carrying heavy volume past the age
+    # cliff get an extra penalty; that combination is where seasons go to die.
+    base = {"RB": 0.30, "WR": 0.20, "TE": 0.22, "QB": 0.16}
+    avail["pos_base"] = avail["position"].map(base).fillna(0.20)
+    cliff = avail["position"].map(AGE_CLIFF).fillna(30)
+    age_excess = (avail["age"].fillna(26) - cliff).clip(lower=0)
+
+    avail["injury_risk"] = (
+        0.35 * avail["pos_base"]
+        + 0.30 * avail["games_missed_rate"].fillna(0.1).clip(0, 1)
+        + 0.15 * avail["report_rate"].clip(0, 1)
+        + 0.12 * (avail["recent_burden"].fillna(0.5) / 2).clip(0, 1)
+        + 0.08 * (age_excess * avail["recent_burden"].fillna(0.5) / 4).clip(0, 1)
+    ).clip(0.02, 0.85)
+
+    return avail[["player_id", "position", "age", "games_missed_rate", "report_rate",
+                  "heavy_seasons", "recent_burden", "injury_risk"]]
+
+
+def age_adjustment(position: str, age: float | None) -> float:
+    """Multiplier from the positional aging curve."""
+    if age is None or not np.isfinite(age):
+        return 1.0
+    cliff = AGE_CLIFF.get(position, 30)
+    decay = AGE_DECAY.get(position, 0.05)
+    if age <= cliff:
+        # Young players still ascending, mostly a WR/TE effect.
+        return 1.0 + min(0.06, max(0.0, (cliff - age) * 0.012))
+    return float(max(0.55, 1.0 - decay * (age - cliff)))

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "fantasy-draft": {
+      "command": "python",
+      "args": ["-m", "ffdraft.server"],
+      "env": {
+        "FFDRAFT_SEASON": "2026",
+        "ESPN_SWID": "",
+        "ESPN_S2": ""
+      }
+    }
+  }
+}

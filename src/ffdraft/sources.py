@@ -1,0 +1,207 @@
+"""Open-source data loaders.
+
+Everything here comes from nflverse (https://github.com/nflverse), which publishes
+play-by-play, weekly stats, snap counts, injury reports, rosters and schedules under
+a permissive license. No scraping of paywalled sites, no brittle HTML parsing.
+
+Each loader caches to local parquet so a draft never waits on the network.
+"""
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from .config import CACHE_DIR, SEASONS
+
+NFLVERSE = "https://github.com/nflverse/nflverse-data/releases/download"
+NFLDATA = "https://raw.githubusercontent.com/nflverse/nfldata/master/data"
+
+# Only the PBP columns we actually model on. Reading all ~380 is needlessly slow.
+PBP_COLS = [
+    "season", "week", "game_id", "posteam", "defteam", "play_type",
+    "pass", "rush", "epa", "success", "wp", "down", "ydstogo",
+    "yards_gained", "sack", "qb_hit", "score_differential",
+    "rush_attempt", "pass_attempt", "penalty", "interception",
+    "pass_touchdown", "rush_touchdown", "air_yards", "series",
+]
+
+
+_MEM: dict[str, pd.DataFrame] = {}
+
+
+def _cached(name: str, builder, max_age_days: float = 7.0) -> pd.DataFrame:
+    """Read from memory, then local parquet, rebuilding if missing or stale.
+
+    The in-memory layer matters more than it looks. Several tools each pull
+    play-by-play, and re-reading a quarter-million rows off disk on every call
+    added most of a second to tools that should feel instant during a live draft.
+    Frames are treated as read-only by callers, so one shared copy is safe.
+    """
+    if name in _MEM:
+        return _MEM[name]
+    path = CACHE_DIR / f"{name}.parquet"
+    if path.exists():
+        age_days = (time.time() - path.stat().st_mtime) / 86400
+        if age_days < max_age_days:
+            df = pd.read_parquet(path)
+            _MEM[name] = df
+            return df
+    df = builder()
+    df.to_parquet(path, index=False)
+    _MEM[name] = df
+    return df
+
+
+def clear_memory_cache() -> None:
+    """Drop in-memory frames, keeping the parquet cache. Used after a forced refresh."""
+    _MEM.clear()
+
+
+def _shrink(df: pd.DataFrame, cat_cols=()) -> pd.DataFrame:
+    """Downcast numerics and categorise repeated strings.
+
+    Play-by-play is the memory hog: team codes and play types repeat across a
+    quarter-million rows, and every float defaults to 64-bit for values that never
+    need it.
+    """
+    for c in cat_cols:
+        if c in df.columns:
+            df[c] = df[c].astype("category")
+    for c in df.select_dtypes(include=["float64"]).columns:
+        df[c] = pd.to_numeric(df[c], downcast="float")
+    for c in df.select_dtypes(include=["int64"]).columns:
+        df[c] = pd.to_numeric(df[c], downcast="integer")
+    return df
+
+
+def _concat_seasons(url_tmpl: str, seasons, columns=None) -> pd.DataFrame:
+    frames = []
+    for s in seasons:
+        try:
+            frames.append(pd.read_parquet(url_tmpl.format(season=s), columns=columns))
+        except Exception as exc:  # a season may not be published yet
+            print(f"  ! skipped {url_tmpl.format(season=s)}: {type(exc).__name__}")
+    if not frames:
+        raise RuntimeError(f"no seasons loaded for {url_tmpl}")
+    return pd.concat(frames, ignore_index=True)
+
+
+def weekly_stats(seasons=None) -> pd.DataFrame:
+    """Per-player, per-week offensive box score for the lookback window.
+
+    nflverse renamed this release from `player_stats` to `stats_player_week` starting
+    with 2025, and dropped a few columns along the way. Both layouts are handled and
+    normalised so the rest of the codebase sees one consistent schema.
+    """
+    seasons = seasons or SEASONS
+    key = f"weekly_stats_{min(seasons)}_{max(seasons)}"
+
+    def build():
+        frames = []
+        for s in seasons:
+            df = None
+            for tmpl in (NFLVERSE + "/stats_player/stats_player_week_{season}.parquet",
+                         NFLVERSE + "/player_stats/player_stats_{season}.parquet"):
+                try:
+                    df = pd.read_parquet(tmpl.format(season=s))
+                    break
+                except Exception:
+                    continue
+            if df is None:
+                print(f"  ! no weekly stats published for {s}")
+                continue
+            frames.append(_normalise_weekly(df))
+        if not frames:
+            raise RuntimeError("no weekly stats loaded")
+        return pd.concat(frames, ignore_index=True)
+
+    return _cached(key, build)
+
+
+def _normalise_weekly(df: pd.DataFrame) -> pd.DataFrame:
+    """Reconcile the pre-2025 and 2025+ weekly stats layouts."""
+    df = df.copy()
+    if "recent_team" not in df.columns and "team" in df.columns:
+        df["recent_team"] = df["team"]
+    # The new release renamed passing interceptions and split sack columns.
+    if "interceptions" not in df.columns:
+        for alt in ("passing_interceptions", "pass_interceptions"):
+            if alt in df.columns:
+                df["interceptions"] = df[alt]
+                break
+        else:
+            df["interceptions"] = 0.0
+    for col in ("sacks", "sack_yards", "dakota"):
+        if col not in df.columns:
+            df[col] = np.nan
+    return df
+
+
+def snap_counts(seasons=None) -> pd.DataFrame:
+    """Per-player, per-game snap share. The truest signal of role."""
+    seasons = seasons or SEASONS
+    key = f"snaps_{min(seasons)}_{max(seasons)}"
+    return _cached(key, lambda: _concat_seasons(
+        NFLVERSE + "/snap_counts/snap_counts_{season}.parquet", seasons
+    ))
+
+
+def injuries(seasons=None) -> pd.DataFrame:
+    """Official weekly injury reports (practice status + game designation)."""
+    seasons = seasons or SEASONS
+    key = f"injuries_{min(seasons)}_{max(seasons)}"
+    return _cached(key, lambda: _concat_seasons(
+        NFLVERSE + "/injuries/injuries_{season}.parquet", seasons
+    ))
+
+
+def weekly_rosters(seasons=None) -> pd.DataFrame:
+    """Week-by-week rosters. Carries birth_date plus the espn_id / sleeper_id crosswalk."""
+    seasons = seasons or SEASONS
+    key = f"rosters_{min(seasons)}_{max(seasons)}"
+    return _cached(key, lambda: _concat_seasons(
+        NFLVERSE + "/weekly_rosters/roster_weekly_{season}.parquet", seasons
+    ))
+
+
+def players() -> pd.DataFrame:
+    """Master player table: IDs across platforms, birth date, draft capital."""
+    return _cached("players", lambda: pd.read_parquet(NFLVERSE + "/players/players.parquet"),
+                   max_age_days=3.0)
+
+
+def schedules() -> pd.DataFrame:
+    """All games incl. future season when released. `div_game` flags divisional matchups."""
+    return _cached("schedules", lambda: pd.read_csv(f"{NFLDATA}/games.csv"), max_age_days=1.0)
+
+
+def play_by_play(seasons=None, columns=None) -> pd.DataFrame:
+    """Play-by-play. Heavy (~1 min/season on first pull), then cached.
+
+    This is what powers the O-line, pace, run/pass split and defensive rankings —
+    computing them from plays is more reliable than scraping somebody's ranking table.
+    """
+    seasons = seasons or SEASONS
+    columns = columns or PBP_COLS
+    key = f"pbp_{min(seasons)}_{max(seasons)}"
+
+    def build():
+        print(f"Downloading play-by-play for {min(seasons)}-{max(seasons)} (one-time, a few minutes)...")
+        df = _concat_seasons(NFLVERSE + "/pbp/play_by_play_{season}.parquet", seasons, columns)
+        return _shrink(df, cat_cols=("posteam", "defteam", "play_type", "game_id"))
+
+    return _cached(key, build, max_age_days=30.0)
+
+
+def cache_status() -> list[dict]:
+    out = []
+    for p in sorted(Path(CACHE_DIR).glob("*.parquet")):
+        out.append({
+            "dataset": p.stem,
+            "size_mb": round(p.stat().st_size / 1e6, 1),
+            "age_days": round((time.time() - p.stat().st_mtime) / 86400, 2),
+        })
+    return out

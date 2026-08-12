@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local data + caches (rebuilt from source on first run)
+.ffdraft/
+*.parquet
+cache/
+data/
+state/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Never commit league credentials
+.env
+espn_cookies.json
