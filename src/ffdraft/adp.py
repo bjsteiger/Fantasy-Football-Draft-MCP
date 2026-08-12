@@ -170,7 +170,6 @@ def _format_shift_ecr(pre: pd.DataFrame, season: int, sc: Scoring) -> pd.DataFra
         return pre
 
     from . import features
-    from .names import normalize as norm_name
 
     prior = prior[prior["season_type"] == "REG"].copy()
     prior["pts_ppr"] = features.fantasy_points(prior, Scoring.preset("ppr"))

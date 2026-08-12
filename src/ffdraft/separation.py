@@ -55,13 +55,7 @@ def estimated_routes(seasons=None) -> pd.DataFrame:
     snaps = snaps[snaps["game_type"] == "REG"]
     pbp = sources.play_by_play(seasons)
 
-    dropbacks = (
-        pbp[(pbp["pass"] == 1) & pbp["posteam"].notna()]
-        .groupby(["season", "posteam", "game_id"]).size()
-        .reset_index(name="team_dropbacks")
-        .rename(columns={"posteam": "team"})
-    )
-    # nflverse snap_counts uses a different game_id format, so join on team-week.
+    # snap_counts and pbp use different game_id formats, so join on team-week.
     week_map = (
         pbp[pbp["posteam"].notna()].groupby(["season", "posteam", "week"])["pass"].sum()
         .reset_index().rename(columns={"posteam": "team", "pass": "team_dropbacks"})
@@ -94,9 +88,8 @@ def _separation_profile(seasons=None) -> pd.DataFrame:
     per route run, yards per route run, plus a composite separation score expressed
     as a z-score against other receivers that season.
     """
-    from .names import normalize as norm_name
-    from .config import Scoring
     from . import features
+    from .names import normalize as norm_name
 
     seasons = seasons or SEASONS
     ngs = ngs_receiving()
@@ -154,7 +147,7 @@ def _separation_profile(seasons=None) -> pd.DataFrame:
     # nothing about how he'd perform in a real workload.
     sep["qualified"] = (sep["routes_est"].fillna(0) >= 250) & (sep["rec_targets"].fillna(0) >= 50)
     sep["sep_score"] = np.nan
-    for season, chunk in sep.groupby("season"):
+    for _season, chunk in sep.groupby("season"):
         q = chunk[chunk["qualified"]]
         if len(q) < 10:
             continue

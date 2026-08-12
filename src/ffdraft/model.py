@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from . import features, sources
-from .config import CURRENT_SEASON, FANTASY_POSITIONS, LeagueSettings, ModelWeights, Scoring
+from .config import CURRENT_SEASON, FANTASY_POSITIONS, LeagueSettings, ModelWeights
 
 
 def _norm_cdf(x: float) -> float:
@@ -481,10 +481,10 @@ def explain(row: pd.Series) -> str:
     if c is not None and np.isfinite(c):
         sr = row.get("startable_rate")
         bits.append(f"consistency {c:.2f}" + (f", startable in {sr:.0%} of weeks" if np.isfinite(sr or np.nan) else ""))
-    for label, key, good_high in [
-        ("O-line", "m_oline", True), ("volume/pace", "m_volume", True),
-        ("schedule", "m_schedule", True), ("age curve", "m_age", True),
-        ("separation", "m_separation", True),
+    for label, key in [
+        ("O-line", "m_oline"), ("volume/pace", "m_volume"),
+        ("schedule", "m_schedule"), ("age curve", "m_age"),
+        ("separation", "m_separation"),
     ]:
         v = row.get(key)
         if v is not None and np.isfinite(v) and abs(v - 1) > 0.02:

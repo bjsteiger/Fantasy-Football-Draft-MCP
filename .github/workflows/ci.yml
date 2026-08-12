@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest ruff
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Test
+        # The suite is deliberately offline: no network, no cached NFL data
+        # required, so CI stays fast and never breaks because an upstream
+        # dataset moved.
+        run: pytest tests -q
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build distribution
+        run: |
+          pip install build
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

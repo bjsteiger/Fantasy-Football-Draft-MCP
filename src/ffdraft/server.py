@@ -11,6 +11,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
 try:  # mcp SDK >= 2.0
     from mcp.server.mcpserver import MCPServer as _Server
 except ImportError:  # mcp SDK 1.x
@@ -20,8 +21,16 @@ from . import adp as adp_mod
 from . import board as bd
 from . import features, model, sources
 from .config import (
-    CURRENT_SEASON, DATA_DIR, FANTASY_POSITIONS, STATE_DIR, LeagueSettings,
-    ModelWeights, Scoring, delete_league, load_settings, save_settings, set_active,
+    CURRENT_SEASON,
+    DATA_DIR,
+    STATE_DIR,
+    LeagueSettings,
+    ModelWeights,
+    Scoring,
+    delete_league,
+    load_settings,
+    save_settings,
+    set_active,
 )
 from .config import list_leagues as cfg_list_leagues
 

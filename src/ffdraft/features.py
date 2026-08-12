@@ -9,10 +9,15 @@ import pandas as pd
 
 from . import sources
 from .config import (
-    AGE_CLIFF, AGE_DECAY, FANTASY_POSITIONS, RECENCY_WEIGHTS, SEASONS,
-    SPIKE_THRESHOLD, STARTABLE_THRESHOLD, Scoring, WORKLOAD_BURDEN,
+    AGE_CLIFF,
+    AGE_DECAY,
+    FANTASY_POSITIONS,
+    RECENCY_WEIGHTS,
+    SPIKE_THRESHOLD,
+    STARTABLE_THRESHOLD,
+    WORKLOAD_BURDEN,
+    Scoring,
 )
-
 
 # ---------------------------------------------------------------- scoring
 
@@ -151,7 +156,7 @@ def _oline_ratings(pbp: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Per-season z-scores so a rating means "relative to that year's league".
-    for season, chunk in ol.groupby("season"):
+    for _season, chunk in ol.groupby("season"):
         idx = chunk.index
         run_score = _zscore(chunk["adj_line_yards"]) - _zscore(chunk["stuff_rate"])
         pass_score = -_zscore(chunk["sack_rate"]) - _zscore(chunk["hit_rate"])
@@ -252,7 +257,7 @@ def _strength_of_schedule(target_season: int, defense: pd.DataFrame) -> pd.DataF
     val_cols = [c for c in hist.columns if c.startswith("fpa_") and not c.endswith("_rank")]
     val_cols += ["def_epa_play"]
     h = hist.copy()
-    num, den = {}, {}
+    num = {}
     for c in val_cols:
         h[f"_n_{c}"] = h[c].fillna(h[c].mean()) * h["w"]
         num[f"_n_{c}"] = "sum"

@@ -5,7 +5,6 @@ import json
 import os
 import re
 import time
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -349,7 +348,8 @@ def sync_espn(league_id: str, season: int = CURRENT_SEASON,
            f"/segments/0/leagues/{league_id}")
     cookies = {}
     if swid and espn_s2:
-        cookies = {"SWID": swid if swid.startswith("{") else "{%s}" % swid, "espn_s2": espn_s2}
+        cookies = {"SWID": swid if swid.startswith("{") else f"{{{swid}}}",
+                   "espn_s2": espn_s2}
     resp = requests.get(url, params={"view": ["mDraftDetail", "mTeam", "kona_player_info"]},
                         cookies=cookies, timeout=20,
                         headers={"User-Agent": "ffdraft-mcp/1.0"})

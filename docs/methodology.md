@@ -1,0 +1,193 @@
+# Methodology
+
+How the numbers are produced, and why several defaults are what they are. Most of these
+were calibrated against data after a first attempt produced something visibly wrong;
+where that happened it's noted, because the failure explains the choice.
+
+## Projection pipeline
+
+### 1. Baseline
+
+Recency-weighted fantasy points per game across five seasons (40% last year, decaying to
+5%), computed under your exact league scoring rather than converted from a published
+number.
+
+Small samples regress toward the mean of **starter-caliber** players at the position —
+the top 36 backs, top 48 receivers and so on — not toward the mean of everyone who
+logged a snap.
+
+> This one was wrong first. Regressing toward the all-player mean pulled the target down
+> so far that a genuine RB1 lost about a third of his projection: Bijan Robinson came out
+> at 189 points, when the real figure is around 250.
+
+Shrinkage is on games played, not seasons. Seventeen healthy games is a real sample;
+three cameos across two years is not.
+
+### 2. Environment multipliers
+
+Each is bounded by a configurable weight, so no single factor can dominate.
+
+**Offensive line.** Run block from Adjusted Line Yards — rushing yards credited to the
+line on a sliding scale, because the line owns the first four yards and the back owns
+the breakaway. Pass block from sacks and QB hits allowed per dropback. Backs get run
+block; passing-game players get pass block.
+
+**Pace and run/pass split.** Plays per game plus *neutral-script* pass rate, measured
+only when win probability is between 20% and 80%. Raw pass rate mostly tells you whether
+a team was losing.
+
+**Schedule.** Recency-weighted fantasy points allowed by every opponent on next season's
+slate, computed per position defended. Divisional games are counted separately — you
+face those six defenses twice and can't escape them.
+
+**Injury.** Availability history, injury-report frequency even in games played, and
+workload burden. Heavy touch volume past the positional age cliff compounds, which is
+where running back seasons tend to go wrong.
+
+**Age.** Positional aging curves — backs decline from 27, receivers from 30.
+
+**Separation.** For pass catchers only, and only those clearing the route threshold.
+
+### 3. Consistency
+
+The floor score: how often a player delivers a usable week. Startable rate (45%), floor
+as a share of average (25%), inverted variance (15%), availability (15%).
+
+Regressed for small samples using the same shrinkage as the projection.
+
+> Also wrong first. Without the regression, a fringe receiver with three good games
+> showed near-perfect reliability and ranked 16th overall on "consistency" he had never
+> demonstrated across a real workload.
+
+### 4. Value over replacement
+
+Replacement level is the last startable player at each position given your league size,
+plus realistic bench depth. It scales with team count, which is the point: the last
+usable back in a 10-team league is a far better player than in a 13-team league, so the
+same player is worth less over replacement in the smaller one.
+
+Superflex adds roughly `0.9 × teams` to the quarterback baseline, since nearly every team
+starts two.
+
+VOR is then blended with consistency at your chosen weight.
+
+## Draft logic
+
+### Positional opportunity cost
+
+The step that actually decides picks. Raw value says take the best player. That's wrong
+in a snake draft: passing on an elite quarterback costs almost nothing, because the one
+you get two rounds later is nearly as good, while passing on an elite back costs a great
+deal.
+
+For each position the model walks the board top-down, accumulating the probability that
+every better player is already gone. That product is the chance a given player is the
+best one left, and the sum over players is the expected value of waiting. A pick is worth
+its **marginal gain over that expectation**.
+
+> Tested at pick 6 with the top five off the board, this recommends Amon-Ra St. Brown
+> over Josh Allen despite Allen grading as the highest-value player on the board — Allen
+> has a 73% chance of lasting to pick 19, and St. Brown does not.
+
+### Survival probability
+
+ADP is treated as the centre of a normal distribution whose spread widens later in the
+draft, matching how real variance behaves: pick 3 goes where pick 3 goes, pick 90 is a
+coin flip across twenty names.
+
+### Roster need
+
+A bench player is worth the odds he ever starts for you, decaying fast at one-slot
+positions. Hard caps shut a position off entirely past the point it can help.
+
+> Before the caps, the simulator drafted eight quarterbacks. The old floor of 0.62 was
+> nowhere near enough to stop a position whose marginal value kept recovering as its
+> better players were taken.
+
+In superflex the second quarterback is a starter rather than a bench body, so those
+rules invert.
+
+## Scoring-format conversion
+
+FantasyPros publishes only full PPR for overall redraft — no half-PPR or standard board
+exists upstream. Used unconverted it misprices exactly the players the format is about.
+
+PPR is the baseline; other formats are converted. The market ranking stays the anchor,
+because it encodes talent, situation and injury news no model captures. Only the format
+delta is applied, and that delta is arithmetic rather than opinion — half PPR is PPR
+minus half a point per catch, with reception volume from each player's own projection.
+
+Damped to 0.6, because rooms move less than pure points math: they also price
+consistency, scarcity and name recognition, none of which change with scoring.
+
+> Undamped, Derrick Henry went from ADP 38 to 1.0 in standard. Right direction, absurd
+> magnitude.
+
+## Rookies
+
+No NFL history, so nothing to regress — but draft capital is a strong predictor, because
+it encodes both the league's talent evaluation and the opportunity a team commits to a
+player it just spent a high pick on.
+
+Two estimators, because neither is safe alone. A log-linear fit on log(pick) is smooth
+and uses every data point but extrapolates badly at the top of the draft. Empirical bin
+medians are honest there but noisy. Predictions blend by sample size and **cap at the
+bin's observed 75th percentile**, so the model can't promise an outcome nobody has
+produced.
+
+Medians rather than means throughout — rookie outcomes are heavily right-skewed.
+
+> The pure fit predicted 19.4 PPG for a back at pick 3. The top-ten bin has actually
+> averaged 15.9 across six players in ten years.
+
+Availability scales with draft capital, not the positional average. Consistency is
+deliberately low for every rookie: roles move mid-season and the floor is a healthy
+scratch.
+
+## Separation
+
+NGS publishes tracking-measured `avg_separation` — yards between receiver and nearest
+defender when the ball arrives. Same underlying quantity as PFF's SEP, from chips rather
+than human charting.
+
+YPRR and TPRR need routes run, which no free source publishes. Routes are estimated as
+snap share × team dropbacks, damped for backs and in-line tight ends who stay in to
+block. Validated against a published PFF table for 2025 Indianapolis: TPRR landed within
+a few hundredths and the ordering matched.
+
+Qualification is strict — 250 estimated routes and 50 targets. These are rate stats, and
+a part-time receiver posts a flattering YPRR that says nothing about a real workload.
+
+**Man/zone splits are not reproducible** from open data. That needs per-play coverage
+classification, which only manual charting provides.
+
+## Backtest
+
+`draft_value_history` compares preseason consensus to actual finish across 913 draftable
+player-seasons.
+
+Value is measured in **points against what that draft slot actually returned** — "did RB5
+capital buy RB5 production?" Rank movement would be unfair to early picks, since
+undrafted breakouts push every drafted player down the final standings.
+
+Historical rankings are converted to your format using the *prior* season's points in
+both formats — what a drafter knew in August. Using the season's own receptions would
+leak the result being measured.
+
+> First attempt rank-recentered everyone and pushed quarterback bust rates to 50%, which
+> is nonsense: quarterbacks don't catch passes. They now hold steady at 29–31% across
+> all three formats.
+
+Unmatched names are excluded rather than counted as zeros. Without that, Joshua Palmer
+showed a 0.00 return across four seasons purely because FantasyPros writes "Josh" — a
+fabricated bust sitting in the middle of the results.
+
+## Known limitations
+
+- **Second-year players** sit awkwardly: enough history to leave the rookie curve, not
+  enough for the veteran regression to trust.
+- **ADP is format- and league-specific.** Consensus is a decent default; your platform's
+  export is better.
+- **No in-season usage updates.** This is a draft tool.
+- **Man/zone coverage splits** are unavailable.
+- **Kickers and defenses** aren't modelled. Take them last anyway.

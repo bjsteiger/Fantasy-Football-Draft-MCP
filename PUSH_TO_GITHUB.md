@@ -3,7 +3,15 @@
 The repo is already initialised with one commit, a `.gitignore` and an MIT `LICENSE`.
 You only need to point it at your account and push.
 
-## 1. Set your identity on the commit
+## 1. Set your username in the docs
+
+Badges and clone URLs contain an `OWNER` placeholder:
+
+```bash
+./scripts_set_owner.sh your-github-username
+```
+
+## 2. Set your identity on the commit
 
 The commit was authored with a placeholder. Fix it before pushing:
 
@@ -14,7 +22,7 @@ git config user.email "your@email.com"
 git commit --amend --reset-author --no-edit
 ```
 
-## 2. Create the repo and push
+## 3. Create the repo and push
 
 **With the GitHub CLI** (easiest — handles auth and repo creation in one step):
 
@@ -39,13 +47,14 @@ HTTPS: use a personal access token as the password
 (https://github.com/settings/tokens, scope `repo`), or set up SSH keys and use the
 `git@github.com:<your-username>/ff-draft-mcp.git` remote instead.
 
-## 3. Check what you're publishing
+## 4. Check what you're publishing
 
 ```bash
 git ls-files
 ```
 
-Should be 17 files: source, README, LICENSE, pyproject, setup script, config example.
+Source, docs, tests, examples, CI workflow, issue templates, README, LICENSE,
+SECURITY, CONTRIBUTING, CHANGELOG.
 
 `.gitignore` deliberately excludes `*.parquet`, `cache/`, `data/`, `state/` and `.env`.
 That keeps ~200 MB of cached nflverse data out of the repo — it rebuilds itself on first

@@ -24,3 +24,6 @@ state/
 # Never commit league credentials
 .env
 espn_cookies.json
+
+# Build artifacts
+*.bak

@@ -2,7 +2,19 @@
 name = "ffdraft-mcp"
 version = "1.0.0"
 description = "Live fantasy football draft analyst as an MCP server"
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["fantasy-football", "mcp", "nfl", "draft", "nflverse"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Games/Entertainment",
+]
 dependencies = [
   "mcp>=1.2.0",
   "pandas>=2.0",
@@ -13,6 +25,15 @@ dependencies = [
   "html5lib>=1.1",
   "beautifulsoup4>=4.12",
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.4", "build"]
+
+[project.urls]
+Homepage = "https://github.com/OWNER/ff-draft-mcp"
+Documentation = "https://github.com/OWNER/ff-draft-mcp/tree/main/docs"
+Issues = "https://github.com/OWNER/ff-draft-mcp/issues"
+Changelog = "https://github.com/OWNER/ff-draft-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ffdraft-mcp = "ffdraft.server:main"

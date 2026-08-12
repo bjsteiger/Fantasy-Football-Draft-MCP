@@ -206,7 +206,7 @@ class PlayerIndex:
         return same or idxs
 
     def resolve(self, query: str, position: str | None = None,
-                min_ratio: float = 0.86) -> tuple[pd.Series | None, str]:
+                min_ratio: float = 0.84) -> tuple[pd.Series | None, str]:
         """Return (row, how_it_matched). Row is None when nothing is confident enough."""
         if not query or not str(query).strip():
             return None, "empty"
@@ -263,6 +263,11 @@ class PlayerIndex:
         # is wasteful — a name that differs in its first letter and its length is
         # never the match. Blocking on those two cheap filters first cuts the
         # candidate set by roughly an order of magnitude before any real comparison.
+        # 0.84 rather than something stricter: two typos in a full name lands at
+        # about 0.857 ("bijon robinsen" -> "bijan robinson"), while a name that
+        # isn't on the board at all scores around 0.15. The gap is wide enough that
+        # a slightly looser threshold buys real typo tolerance without risking a
+        # wrong match, and genuine ambiguity is caught before this point anyway.
         best, best_r = None, 0.0
         qlen, qinit = len(base), base[:1]
         for k in self._all_keys:

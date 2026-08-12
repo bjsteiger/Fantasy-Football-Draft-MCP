@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 CACHE_DIR = Path(os.environ.get("FFDRAFT_CACHE", Path.home() / ".ffdraft" / "cache"))
@@ -54,7 +54,7 @@ class Scoring:
     two_pt: float = 2.0
 
     @classmethod
-    def preset(cls, name: str) -> "Scoring":
+    def preset(cls, name: str) -> Scoring:
         name = name.lower().replace("-", "_")
         if name in ("ppr", "full_ppr"):
             return cls(rec=1.0)
