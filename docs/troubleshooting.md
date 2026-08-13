@@ -17,6 +17,18 @@ Check the config path is right for your OS, use an absolute path to the Python t
 `ffdraft` installed, and restart Claude fully. Verify the server runs standalone:
 `python -m ffdraft.server` — it should start and wait on stdio.
 
+**`mcp-server-fantasy-draft.log` shows `ModuleNotFoundError: No module named 'ffdraft'`
+even though `pip install -e .` succeeded and the server runs fine from the terminal**
+macOS + Python 3.13 specific. The editable install works by dropping a `.pth` file (e.g.
+`__editable__.ffdraft_mcp-1.0.0.pth`) in the venv's `site-packages` that points at `src/`.
+Python 3.13 added a safety check that silently skips `.pth` files with the OS "hidden" flag
+set, and this file can end up hidden (`ls -lO` on it shows `hidden` in the flags column) —
+run `python -v -c "import ffdraft"` and look for `Skipping hidden .pth file` to confirm.
+Clearing the flag (`chflags nohidden <file>`) can work but may not stick if something keeps
+re-hiding it. The reliable fix: add `"PYTHONPATH": "/absolute/path/to/ff-draft-mcp/src"` to
+the server's `env` block in `claude_desktop_config.json` — this bypasses the `.pth`
+mechanism entirely, regardless of the flag's state.
+
 ## Data
 
 **First run takes minutes**

@@ -30,17 +30,27 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "fantasy-draft": {
-      "command": "python",
+      "command": "/absolute/path/to/ff-draft-mcp/.venv/bin/python",
       "args": ["-m", "ffdraft.server"],
       "env": {
         "FFDRAFT_SEASON": "2026",
         "ESPN_SWID": "optional-for-private-espn-leagues",
-        "ESPN_S2": "optional-for-private-espn-leagues"
+        "ESPN_S2": "optional-for-private-espn-leagues",
+        "PYTHONPATH": "/absolute/path/to/ff-draft-mcp/src"
       }
     }
   }
 }
 ```
+
+Use absolute paths for both `command` and `PYTHONPATH` — Claude Desktop launches the server
+from an undefined working directory, so plain `python` or relative paths won't resolve.
+`PYTHONPATH` is a deliberate belt-and-suspenders: on macOS with Python 3.13, an editable
+install's `.pth` file can end up with the OS "hidden" flag set (cause varies), and Python
+3.13 silently skips hidden `.pth` files at startup, which breaks the `ffdraft` import even
+though `pip install -e .` succeeded. Pointing `PYTHONPATH` straight at `src/` sidesteps that
+mechanism entirely. See [troubleshooting](docs/troubleshooting.md) if the server still
+doesn't appear.
 
 Then in Claude:
 

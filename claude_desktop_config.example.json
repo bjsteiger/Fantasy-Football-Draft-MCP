@@ -1,12 +1,13 @@
 {
   "mcpServers": {
     "fantasy-draft": {
-      "command": "python",
+      "command": "/absolute/path/to/ff-draft-mcp/.venv/bin/python",
       "args": ["-m", "ffdraft.server"],
       "env": {
         "FFDRAFT_SEASON": "2026",
         "ESPN_SWID": "",
-        "ESPN_S2": ""
+        "ESPN_S2": "",
+        "PYTHONPATH": "/absolute/path/to/ff-draft-mcp/src"
       }
     }
   }

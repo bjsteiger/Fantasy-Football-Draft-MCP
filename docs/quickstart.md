@@ -42,15 +42,24 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "fantasy-draft": {
-      "command": "python",
+      "command": "/absolute/path/to/ff-draft-mcp/.venv/bin/python",
       "args": ["-m", "ffdraft.server"],
-      "env": { "FFDRAFT_SEASON": "2026" }
+      "env": {
+        "FFDRAFT_SEASON": "2026",
+        "PYTHONPATH": "/absolute/path/to/ff-draft-mcp/src"
+      }
     }
   }
 }
 ```
 
-Restart Claude. You should see the fantasy-draft tools available.
+Use absolute paths, not `python` or relative paths — Claude Desktop launches the server from
+an undefined working directory. `PYTHONPATH` avoids a macOS/Python 3.13 issue where the
+editable install's `.pth` file gets skipped at startup (see
+[troubleshooting](troubleshooting.md)).
+
+Restart Claude **fully** (quit and reopen, not just close the window). You should see the
+fantasy-draft tools available.
 
 ## 4. Set up your leagues
 
