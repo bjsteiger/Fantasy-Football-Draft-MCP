@@ -39,6 +39,17 @@ Retune factor weights: `consistency_weight`, `injury_weight`, `oline_weight`,
 
 ## During the draft
 
+### `on_the_clock`
+The whole on-the-clock workflow in one call: `sync_draft` (fresh pull, no cached
+state) → `draft_status` (round, on-the-clock, roster, confirmed against the sync)
+→ `who_should_i_pick` (recommendation, reasoning, survival odds) → `value_picks`
+(scoped to your current round and next) → `separation_report`, appended only when
+the top recommendation is a WR or TE, for that player's route efficiency and
+schedule context. Takes `sync_draft`'s arguments (`platform`, `league_id`,
+`draft_id`, `pasted_board`, `season`) plus `limit` for how many recommendations
+`who_should_i_pick` returns. Use this instead of the five calls separately when
+you're on the clock and want the full picture at once.
+
 ### `who_should_i_pick`
 The main one. Returns ranked recommendations with reasoning, the pick being evaluated,
 your roster, and each player's odds of surviving to your next pick.

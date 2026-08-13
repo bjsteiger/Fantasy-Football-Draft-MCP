@@ -129,7 +129,8 @@ hundredths, ordering correct.
 | `remove_league` | Delete a league and its draft history |
 | `refresh_data` | Rebuild the board from source. Run once before draft day |
 | `sync_draft` | Pull the live board from Sleeper, ESPN, or pasted text |
-| `who_should_i_pick` | **The main one.** Recommendation + reasoning for the pick on the clock |
+| `on_the_clock` | **The main one.** Sync, status, recommendation, round-scoped value, and matchup detail — one call |
+| `who_should_i_pick` | Recommendation + reasoning for the pick on the clock |
 | `best_available` | Next best players, sortable by value, consistency, or ADP bargain |
 | `record_pick` / `undo_pick` / `reset_draft` | Manual board management |
 | `draft_status` | Your roster and where the draft stands |

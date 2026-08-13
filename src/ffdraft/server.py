@@ -519,6 +519,57 @@ def value_picks(limit: int = 20, direction: str = "undervalued") -> str:
 
 
 @mcp.tool()
+def on_the_clock(platform: str, league_id: str | None = None, draft_id: str | None = None,
+                 pasted_board: str | None = None, season: int = CURRENT_SEASON,
+                 limit: int = 6) -> str:
+    """The full on-the-clock workflow in one call: sync, status, pick, value, matchup.
+
+    Runs, in order:
+    1. sync_draft — a fresh pull from your platform, no cached state.
+    2. draft_status — round, on-the-clock, and your roster, confirmed against the sync.
+    3. who_should_i_pick — the recommendation, reasoning, and survival odds.
+    4. value_picks — market-value context, scoped to this round and next.
+    5. separation_report — only when the top recommendation is a WR or TE, that
+       player's route efficiency and schedule context.
+
+    Use this instead of calling each tool separately when you're on the clock and
+    want the full picture in one shot. platform/league_id/draft_id/pasted_board/season
+    are exactly sync_draft's arguments.
+    """
+    sync = json.loads(sync_draft(platform, league_id, draft_id, pasted_board, season))
+    if "error" in sync:
+        return json.dumps({"step": "sync_draft", **sync}, indent=2)
+
+    status = json.loads(draft_status())
+    rec = json.loads(who_should_i_pick(limit=limit))
+
+    league, _ = _settings()
+    rnd = rec.get("round", 1)
+    lo, hi = (rnd - 1) * league.teams + 1, (rnd + 1) * league.teams
+    pool = json.loads(value_picks(limit=100, direction="undervalued"))
+    in_window = [p for p in pool.get("players", [])
+                if p.get("adp") is not None and lo <= p["adp"] <= hi]
+
+    result = {
+        "sync": sync,
+        "draft_status": status,
+        "recommendation": rec,
+        "value_picks_this_round": {
+            "round_window": f"picks {lo}-{hi}",
+            "direction": pool.get("direction"),
+            "players": in_window[:8],
+        },
+    }
+
+    picks = rec.get("recommendations") or []
+    if picks and picks[0].get("position") in ("WR", "TE"):
+        result["separation_report"] = json.loads(
+            separation_report(position=picks[0]["position"], player_name=picks[0]["player"]))
+
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
 def draft_value_history(seasons: str = "2021,2022,2023,2024", group_by: str = "draft_round") -> str:
     """Backtest: how preseason consensus rank compared to where players actually finished.
 
