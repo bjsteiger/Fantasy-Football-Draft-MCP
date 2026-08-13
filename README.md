@@ -136,7 +136,7 @@ hundredths, ordering correct.
 | `prewarm` | Build all caches before draft day so nothing computes on the clock |
 | `rookie_report` | This year's rookie class, projected from draft capital |
 | `resolve_names` | Check how names resolve before trusting a paste sync |
-| `separation_report` | Separation, cushion, YPRR, TPRR — the open-data PFF analogue |
+| `separation_report` | Separation, cushion, YPRR, TPRR, plus a schedule-adjusted matchup score |
 | `value_picks` | Where the model disagrees with the draft market |
 | `draft_value_history` | Backtest: preseason rank vs actual finish, by round and position |
 | `persistent_value_players` | Players who beat their draft cost year after year |

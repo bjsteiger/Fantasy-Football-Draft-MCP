@@ -79,6 +79,10 @@ the board.
 ### `separation_report`
 Separation, cushion, YPRR and TPRR. Pass `player_name` for one player's history, or
 `position` for a leaderboard. Only players clearing 250 estimated routes and 50 targets.
+Also returns `matchup_z` (the player's team's upcoming schedule difficulty at that
+position -- the season-long, team-level stand-in for a WR/CB matchup chart) and
+`matchup_adjusted_score` (talent blended with matchup), so you can rank receivers by
+who's actually worth the pickup this year, not just who's the best athlete.
 
 ### `value_picks`
 Where the model disagrees with the market. `direction`: `undervalued` or `overvalued`.

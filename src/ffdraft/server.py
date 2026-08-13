@@ -410,13 +410,24 @@ def reset_draft() -> str:
 @mcp.tool()
 def separation_report(position: str = "WR", player_name: str | None = None,
                       limit: int = 20) -> str:
-    """Separation and route efficiency — the open-data version of a PFF SEP/YPRR table.
+    """Separation and route efficiency, plus the season-long matchup each player draws.
 
     avg_separation is NFL Next Gen Stats tracking data: yards of daylight between
     receiver and nearest defender when the ball arrives. YPRR and TPRR use routes
     estimated from snap share times team dropbacks. Only players who cleared 250
     routes and 50 targets in a season are included, so these are real workloads
     rather than flattering part-time rates.
+
+    `matchup_z` is the receiver's own team's schedule difficulty for the upcoming
+    season, from the same opponent-defense data that drives the model's schedule
+    adjustment: positive means an easier slate (opponents allow more fantasy points
+    to the position), negative means a tougher one. This is the open-data stand-in
+    for a WR/CB matchup chart -- team-level and season-long rather than man-coverage
+    and week-to-week, since which specific corner covers which receiver on a given
+    snap isn't in any open dataset (that needs per-play charting only commercial
+    providers do). `matchup_adjusted_score` blends the two: how good the receiver
+    is, adjusted for how hard his schedule is, in one number you can rank WRs by
+    for a draft-day "worth the pickup this year" call.
 
     Man-versus-zone splits are not reproducible from open data — that needs
     per-play coverage charting.
@@ -428,26 +439,48 @@ def separation_report(position: str = "WR", player_name: str | None = None,
     if prof.empty:
         return json.dumps({"error": "no qualified players"})
 
+    league, _ = _settings()
+    dfn = features.defense_ratings(sc=league.scoring)
+    sos = features.strength_of_schedule(CURRENT_SEASON, dfn)
+    pos = position.upper()
+    sos_col = f"sos_{pos}_z"
+    sos_cols = ["team"] + ([sos_col] if sos_col in sos.columns else [])
+
     if player_name:
         row = bd.match_player(player_name, _build_board())
         target = bd.norm_name(row["name"]) if row is not None else bd.norm_name(player_name)
         hist = prof[prof["_key"] == target].sort_values("season")
+        if sos_col in sos.columns:
+            hist = hist.merge(sos[sos_cols], on="team", how="left") \
+                       .rename(columns={sos_col: "matchup_z"})
+        cols = ["season", "team", "avg_separation", "avg_cushion", "yprr", "tprr",
+                "rec_targets", "rec_yards", "routes_est", "sep_score"]
+        if "matchup_z" in hist.columns:
+            cols.append("matchup_z")
         return json.dumps({
             "player": player_name,
-            "by_season": _rows(hist, ["season", "team", "avg_separation", "avg_cushion",
-                                      "yprr", "tprr", "rec_targets", "rec_yards",
-                                      "routes_est", "sep_score"], 6),
+            "by_season": _rows(hist, cols, 6),
         }, indent=2, default=str)
 
     recent = int(prof["season"].max())
-    cur = prof[(prof["season"] == recent) & (prof["position"] == position.upper())]
-    cur = cur.sort_values("sep_score", ascending=False)
+    cur = prof[(prof["season"] == recent) & (prof["position"] == pos)].copy()
+    cols = ["name", "team", "avg_separation", "avg_cushion", "yprr",
+            "tprr", "rec_targets", "routes_est", "sep_score"]
+    if sos_col in sos.columns and not cur.empty:
+        cur = cur.merge(sos[sos_cols], on="team", how="left").rename(columns={sos_col: "matchup_z"})
+        talent_z = (cur["sep_score"] - cur["sep_score"].mean()) / cur["sep_score"].std(ddof=0)
+        cur["matchup_adjusted_score"] = talent_z.fillna(0) + cur["matchup_z"].fillna(0)
+        cols += ["matchup_z", "matchup_adjusted_score"]
+        cur = cur.sort_values("matchup_adjusted_score", ascending=False)
+    else:
+        cur = cur.sort_values("sep_score", ascending=False)
     return json.dumps({
-        "season": recent, "position": position.upper(),
+        "season": recent, "position": pos, "schedule_season": CURRENT_SEASON,
         "note": "sep_score is a within-season z-score blending separation, YPRR, TPRR "
-                "and YAC over expected",
-        "players": _rows(cur, ["name", "team", "avg_separation", "avg_cushion", "yprr",
-                               "tprr", "rec_targets", "routes_est", "sep_score"], limit),
+                "and YAC over expected. matchup_z: positive = easier upcoming schedule "
+                "for this position, negative = tougher. matchup_adjusted_score = talent "
+                "z-score + matchup_z, higher is a better season-long pickup.",
+        "players": _rows(cur, cols, limit),
     }, indent=2, default=str)
 
 
