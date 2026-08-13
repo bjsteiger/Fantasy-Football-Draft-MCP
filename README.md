@@ -139,6 +139,7 @@ hundredths, ordering correct.
 | `separation_report` | Separation, cushion, YPRR, TPRR, plus a schedule-adjusted matchup score |
 | `value_picks` | Where the model disagrees with the draft market |
 | `draft_value_history` | Backtest: preseason rank vs actual finish, by round and position |
+| `matchup_backtest` | Backtest: does schedule-adjusted matchup score beat talent alone at predicting finish? |
 | `persistent_value_players` | Players who beat their draft cost year after year |
 | `player_report` | Every modelled factor for one player |
 | `compare_players` | Head to head, up to four |

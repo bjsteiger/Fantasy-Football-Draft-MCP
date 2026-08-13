@@ -542,6 +542,47 @@ def draft_value_history(seasons: str = "2021,2022,2023,2024", group_by: str = "d
 
 
 @mcp.tool()
+def matchup_backtest(seasons: str = "2021,2022,2023,2024", position: str = "WR",
+                     top_n: int = 24) -> str:
+    """Backtest: does matchup_adjusted_score (from separation_report) beat talent alone?
+
+    separation_report's matchup_adjusted_score assumes schedule difficulty adds real
+    predictive value on top of receiver talent. This checks that assumption against
+    real seasons instead of taking it on faith: for each season, talent (`talent_z`)
+    is that player's separation score from the *prior* season only, and matchup
+    difficulty (`matchup_z`) is the same leakage-free strength_of_schedule the live
+    recommender uses, both compared to actual fantasy points scored.
+
+    A positive `improvement_corr` / `improvement_precision` means the schedule
+    adjustment earns its keep. Near zero or negative means talent alone predicts
+    just as well, and matchup_adjusted_score isn't adding real signal.
+    """
+    league, _ = _settings()
+    yrs = [int(s) for s in seasons.split(",") if s.strip()]
+    hist = adp_mod.matchup_value_backtest(yrs, position.upper(), league.scoring)
+    if hist.empty:
+        return json.dumps({"error": "no matchup backtest data available for those seasons"})
+    summary = adp_mod.matchup_backtest_summary(hist, top_n)
+
+    swing = hist.copy()
+    swing["swing"] = swing["matchup_z"].abs()
+    swing_cols = ["name", "season", "team", "talent_z", "matchup_z",
+                 "matchup_adjusted_score", "points", "finish_pos_rank"]
+    biggest_swings = swing.sort_values("swing", ascending=False)
+
+    return json.dumps({
+        "position": position.upper(),
+        "summary": summary,
+        "interpretation": (
+            "corr is Spearman rank correlation against actual fantasy points; "
+            "top_n_precision is, of each metric's predicted top-N players, what "
+            "share actually finished top-N that season, averaged across seasons"
+        ),
+        "biggest_schedule_swings": _rows(biggest_swings, swing_cols, 15),
+    }, indent=2, default=str)
+
+
+@mcp.tool()
 def persistent_value_players(seasons: str = "2021,2022,2023,2024",
                              min_seasons: int = 3, limit: int = 20) -> str:
     """Players who beat their draft cost repeatedly, not once.

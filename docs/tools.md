@@ -102,6 +102,14 @@ Converted to your scoring format.
 ### `persistent_value_players`
 Players who beat their draft cost repeatedly rather than once.
 
+### `matchup_backtest`
+Validates `separation_report`'s `matchup_adjusted_score` against real outcomes: does
+talent + schedule difficulty predict actual finish better than talent alone? Talent
+comes from the *prior* season's separation score only, schedule difficulty from the
+same leakage-free `strength_of_schedule` the live recommender uses — nothing here has
+seen the season it's scoring. Reports Spearman correlation and top-N precision for
+both metrics side by side, plus the players where schedule swung the pick most.
+
 ### `resolve_names`
 Check how names resolve before trusting a paste sync. Reports match type per name.
 

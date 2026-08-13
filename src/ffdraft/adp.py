@@ -276,6 +276,122 @@ def hit_rates(hist: pd.DataFrame, by: str = "draft_round") -> pd.DataFrame:
     return g.sort_values(by)
 
 
+def matchup_value_backtest(seasons: list[int], position: str = "WR",
+                           sc: Scoring | None = None) -> pd.DataFrame:
+    """Did talent + schedule-adjusted matchup predict finish better than talent alone?
+
+    Backtests the matchup_adjusted_score exposed by separation_report, the same way
+    adp_vs_finish backtests consensus rank: nothing here has seen the season it's
+    scoring.
+
+    Talent (`talent_z`) is that player's separation score from the *prior* season
+    only -- what a drafter actually knew in August, not a mid-season update. Matchup
+    difficulty (`matchup_z`) comes from strength_of_schedule() computed exactly the
+    way the live model computes it: opponent defensive strength is a recency-weighted
+    blend of seasons strictly before the one being predicted, so the defense side
+    can't leak either. The schedule itself (who plays whom) is legitimately known
+    in advance -- the NFL publishes it -- so using it isn't leakage.
+
+    Actual finish is real fantasy points from that season's box scores.
+    """
+    from . import features
+    from . import separation as sep_mod
+
+    sc = sc or Scoring()
+    position = position.upper()
+    frames = []
+    for season in seasons:
+        try:
+            prior = sep_mod.separation_profile([season - 1])
+            prior = prior[prior["qualified"] & (prior["position"] == position)]
+            if prior.empty:
+                print(f"  ! {season}: no qualified {position}s in {season - 1} to score talent from")
+                continue
+            talent = prior[["player_id", "name", "sep_score"]].rename(
+                columns={"sep_score": "talent_z"})
+
+            fin = season_finish(season, sc)
+            fin = fin[fin["position"] == position]
+            if fin.empty:
+                continue
+
+            dfn = features.defense_ratings(sc=sc)
+            sos = features.strength_of_schedule(season, dfn)
+            sos_col = f"sos_{position}_z"
+            if sos_col not in sos.columns:
+                print(f"  ! {season}: no schedule data for {position}")
+                continue
+
+            w = sources.weekly_stats([season])
+            w = w[w["position"] == position]
+            team_of = (w.sort_values("week").groupby("player_id")["recent_team"]
+                       .last().rename("team").reset_index())
+
+            m = fin.merge(talent, on="player_id", how="inner")
+            if m.empty:
+                continue
+            m = m.merge(team_of, on="player_id", how="left")
+            m = m.merge(sos[["team", sos_col]], on="team", how="left")
+            m = m.rename(columns={sos_col: "matchup_z"})
+            m["matchup_z"] = m["matchup_z"].fillna(0.0)
+            m["matchup_adjusted_score"] = m["talent_z"] + m["matchup_z"]
+            m["season"] = season
+            frames.append(m)
+        except Exception as exc:
+            print(f"  ! {season}: {type(exc).__name__}: {exc}")
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def matchup_backtest_summary(hist: pd.DataFrame, top_n: int = 24) -> dict:
+    """Compare talent-only vs matchup-adjusted score against actual finish.
+
+    Spearman (rank) correlation against actual fantasy points, since raw fantasy
+    points are heavily right-skewed and a rank-based measure is what actually
+    matters for draft decisions. Also a top-N precision check computed per season
+    then averaged: of the players each metric would have ranked in the top N, what
+    share actually finished top N that season. N=24 is roughly the WR2-or-better
+    cutoff in a 12-team league.
+
+    A positive `improvement_corr` / `improvement_precision` means the matchup
+    adjustment helped. Near zero or negative means talent alone did just as well,
+    and the adjustment isn't earning its added complexity.
+    """
+    h = hist.dropna(subset=["talent_z", "matchup_adjusted_score", "points"]).copy()
+    if h.empty:
+        return {"n_player_seasons": 0}
+
+    def spearman(a, b):
+        return float(pd.Series(a).rank().corr(pd.Series(b).rank()))
+
+    talent_precisions, matchup_precisions = [], []
+    for _season, chunk in h.groupby("season"):
+        chunk = chunk.copy()
+        chunk["actual_top"] = chunk["points"].rank(ascending=False, method="min") <= top_n
+        talent_top = chunk.sort_values("talent_z", ascending=False).head(top_n)
+        matchup_top = chunk.sort_values("matchup_adjusted_score", ascending=False).head(top_n)
+        if len(talent_top):
+            talent_precisions.append(talent_top["actual_top"].mean())
+        if len(matchup_top):
+            matchup_precisions.append(matchup_top["actual_top"].mean())
+
+    talent_corr = spearman(h["talent_z"], h["points"])
+    matchup_corr = spearman(h["matchup_adjusted_score"], h["points"])
+    talent_prec = float(np.mean(talent_precisions)) if talent_precisions else float("nan")
+    matchup_prec = float(np.mean(matchup_precisions)) if matchup_precisions else float("nan")
+
+    return {
+        "n_player_seasons": int(len(h)),
+        "seasons": sorted(int(s) for s in h["season"].unique()),
+        "top_n": top_n,
+        "talent_only_corr": talent_corr,
+        "matchup_adjusted_corr": matchup_corr,
+        "improvement_corr": matchup_corr - talent_corr,
+        "talent_only_top_n_precision": talent_prec,
+        "matchup_adjusted_top_n_precision": matchup_prec,
+        "improvement_precision": matchup_prec - talent_prec,
+    }
+
+
 def repeat_value_players(hist: pd.DataFrame, min_seasons: int = 2) -> pd.DataFrame:
     """Players who beat their draft slot repeatedly rather than once.
 
