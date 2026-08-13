@@ -21,6 +21,31 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
+def apply_current_team(tbl: pd.DataFrame, depth_chart: pd.DataFrame) -> pd.DataFrame:
+    """Override each player's team with the current depth chart, when available.
+
+    `tbl["team"]` (built from weekly box scores) reflects whichever team a player
+    last actually played a game for, which can be a full offseason stale by draft
+    day -- trades, cuts and free-agent signings don't show up until Week 1 snaps
+    get recorded. Depth charts are filed by the teams themselves, so they catch a
+    move as soon as it's reported. A player missing from the depth chart (e.g. a
+    rookie before training camp, or if this season's chart isn't out yet) just
+    keeps his last known team -- this is a correction, not a hard requirement.
+
+    Must run before the O-line / pace / schedule merges below, which key off
+    `team`: otherwise a traded player would get graded on his old team's offense.
+    """
+    if depth_chart is None or depth_chart.empty or "player_id" not in tbl.columns:
+        return tbl
+    out = tbl.merge(
+        depth_chart[["player_id", "team"]].rename(columns={"team": "_current_team"}),
+        on="player_id", how="left",
+    )
+    has_current = out["_current_team"].notna()
+    out.loc[has_current, "team"] = out.loc[has_current, "_current_team"]
+    return out.drop(columns=["_current_team"])
+
+
 def _season_weighted(profiles: pd.DataFrame, col: str) -> pd.Series:
     wmap = features._season_weights(sorted(profiles["season"].unique()))
     p = profiles.copy()
@@ -78,6 +103,7 @@ def build_player_table(league: LeagueSettings, weights: ModelWeights,
     tbl["age"] = tbl["age"].fillna(26.0) + (season - profiles["season"].max())
 
     # --- team environment
+    tbl = apply_current_team(tbl, sources.depth_charts())
     pbp = sources.play_by_play()
     ol = features.oline_ratings(pbp)
     pace = features.team_pace_and_split(pbp)

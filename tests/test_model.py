@@ -6,6 +6,7 @@ from ffdraft.board import FORMAT_SHIFT_DAMPING, convert_adp_format, synthetic_ad
 from ffdraft.config import LeagueSettings
 from ffdraft.model import (
     _positional_need,
+    apply_current_team,
     expected_best_at_next_pick,
     survival_probability,
     survival_probability_vec,
@@ -91,6 +92,44 @@ class TestOpportunityCost:
                                "p_available_next": 0.0}])
         out = expected_best_at_next_pick(board)
         assert np.isfinite(out["TE"])
+
+
+class TestCurrentTeam:
+    def test_depth_chart_overrides_a_stale_team(self):
+        """A player traded since he last played a game should show the new team."""
+        tbl = pd.DataFrame([{"player_id": "p1", "name": "Trade Guy", "team": "OLD"}])
+        dc = pd.DataFrame([{"player_id": "p1", "team": "NEW"}])
+        out = apply_current_team(tbl, dc)
+        assert out.loc[0, "team"] == "NEW"
+
+    def test_player_missing_from_depth_chart_keeps_last_known_team(self):
+        tbl = pd.DataFrame([{"player_id": "p1", "name": "Rookie", "team": "OLD"}])
+        dc = pd.DataFrame([{"player_id": "p2", "team": "NEW"}])
+        out = apply_current_team(tbl, dc)
+        assert out.loc[0, "team"] == "OLD"
+
+    def test_empty_depth_chart_is_a_no_op(self):
+        tbl = pd.DataFrame([{"player_id": "p1", "name": "X", "team": "OLD"}])
+        out = apply_current_team(tbl, pd.DataFrame(columns=["player_id", "team"]))
+        assert out.loc[0, "team"] == "OLD"
+
+    def test_none_depth_chart_is_a_no_op(self):
+        tbl = pd.DataFrame([{"player_id": "p1", "name": "X", "team": "OLD"}])
+        out = apply_current_team(tbl, None)
+        assert out.loc[0, "team"] == "OLD"
+
+    def test_multiple_players_only_matched_ones_move(self):
+        tbl = pd.DataFrame([
+            {"player_id": "p1", "name": "Traded", "team": "OLD"},
+            {"player_id": "p2", "name": "Stayed", "team": "SAME"},
+        ])
+        dc = pd.DataFrame([
+            {"player_id": "p1", "team": "NEW"},
+            {"player_id": "p2", "team": "SAME"},
+        ])
+        out = apply_current_team(tbl, dc).set_index("player_id")
+        assert out.loc["p1", "team"] == "NEW"
+        assert out.loc["p2", "team"] == "SAME"
 
 
 class TestSyntheticAdp:

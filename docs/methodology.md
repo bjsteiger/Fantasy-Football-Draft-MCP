@@ -23,6 +23,19 @@ logged a snap.
 Shrinkage is on games played, not seasons. Seventeen healthy games is a real sample;
 three cameos across two years is not.
 
+### Team assignment
+
+Before any environment multiplier is applied, each player's team is reconciled
+against the current official depth charts, not just his last known team from box
+scores. Box-score history only updates once a player has played a game for a team,
+so a trade, cut or free-agent signing is invisible there until Week 1 — which is
+after most drafts happen. Depth charts are filed by the teams themselves and update
+through the offseason, catching a move as soon as it's reported. This matters beyond
+the label: O-line, pace and schedule strength below are all looked up by team, so a
+stale team would grade a traded player on his old offense. A player missing from the
+depth chart (a rookie before camp, or before this season's chart is published) just
+keeps his last known team.
+
 ### 2. Environment multipliers
 
 Each is bounded by a configurable weight, so no single factor can dominate.

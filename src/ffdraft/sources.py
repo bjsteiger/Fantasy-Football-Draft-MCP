@@ -173,6 +173,61 @@ def players() -> pd.DataFrame:
                    max_age_days=3.0)
 
 
+# nflverse has used both PFR-style and standard team codes across releases; keep
+# this in sync with rookies.PFR_TEAM_FIX rather than importing it, since rookies
+# imports from this module and a reverse import would be circular.
+_TEAM_CODE_FIX = {
+    "LVR": "LV", "NOR": "NO", "SFO": "SF", "LAR": "LA", "TAM": "TB",
+    "KAN": "KC", "GNB": "GB", "NWE": "NE", "SDG": "LAC", "STL": "LA",
+    "OAK": "LV", "RAI": "LV", "PHO": "ARI", "ARZ": "ARI", "CLT": "IND",
+    "RAV": "BAL", "HTX": "HOU", "OTI": "TEN", "CRD": "ARI", "BLT": "BAL",
+    "JAC": "JAX", "WSH": "WAS",
+}
+
+
+def depth_charts(season: int | None = None) -> pd.DataFrame:
+    """Each player's current NFL team, from the official team-filed depth charts.
+
+    Weekly box-score stats only update a player's team once he's actually played a
+    game for it, so trades, cuts and free-agent signings are invisible until Week 1
+    snaps get recorded -- which is well after most drafts happen. Depth charts are
+    submitted by the teams themselves and update through the offseason, so they
+    catch a move as soon as a team reports it. Refreshed daily (max_age_days=1),
+    since August roster churn is fast.
+
+    Returns columns [player_id, team]; empty DataFrame if the season's depth chart
+    isn't published yet (very early offseason) rather than raising, since this is a
+    "nice if available" override, not a hard dependency.
+    """
+    from .config import CURRENT_SEASON
+    season = season or CURRENT_SEASON
+    key = f"depth_charts_{season}"
+
+    def build():
+        try:
+            df = pd.read_parquet(NFLVERSE + f"/depth_charts/depth_charts_{season}.parquet")
+        except Exception as exc:
+            print(f"  ! no depth chart published yet for {season}: {type(exc).__name__}")
+            return pd.DataFrame(columns=["player_id", "team"])
+        # Column names have varied across nflverse depth_chart schema versions.
+        if "team" not in df.columns and "club_code" in df.columns:
+            df["team"] = df["club_code"]
+        if "player_id" not in df.columns and "gsis_id" in df.columns:
+            df["player_id"] = df["gsis_id"]
+        if "player_id" not in df.columns or "team" not in df.columns:
+            print("  ! depth chart missing expected columns, skipping team override")
+            return pd.DataFrame(columns=["player_id", "team"])
+        df = df.dropna(subset=["player_id", "team"]).copy()
+        df["team"] = df["team"].astype("string").str.upper().replace(_TEAM_CODE_FIX)
+        # Keep each player's most recent report (highest week = latest depth chart).
+        sort_cols = [c for c in ("week",) if c in df.columns]
+        if sort_cols:
+            df = df.sort_values(sort_cols)
+        return df.drop_duplicates("player_id", keep="last")[["player_id", "team"]]
+
+    return _cached(key, build, max_age_days=1.0)
+
+
 def schedules() -> pd.DataFrame:
     """All games incl. future season when released. `div_game` flags divisional matchups."""
     return _cached("schedules", lambda: pd.read_csv(f"{NFLDATA}/games.csv"), max_age_days=1.0)
