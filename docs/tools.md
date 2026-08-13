@@ -79,10 +79,10 @@ the board.
 ### `separation_report`
 Separation, cushion, YPRR and TPRR. Pass `player_name` for one player's history, or
 `position` for a leaderboard. Only players clearing 250 estimated routes and 50 targets.
-Also returns `matchup_z` (the player's team's upcoming schedule difficulty at that
-position -- the season-long, team-level stand-in for a WR/CB matchup chart) and
-`matchup_adjusted_score` (talent blended with matchup), so you can rank receivers by
-who's actually worth the pickup this year, not just who's the best athlete.
+Ranked by `sep_score` (talent). Also returns `matchup_z` (the player's team's upcoming
+schedule difficulty at that position -- the season-long, team-level stand-in for a
+WR/CB matchup chart), shown for reference only: a backtest (`matchup_backtest`) found
+blending it into the ranking made WR predictions worse than talent alone, not better.
 
 ### `value_picks`
 Where the model disagrees with the market. `direction`: `undervalued` or `overvalued`.
@@ -103,12 +103,14 @@ Converted to your scoring format.
 Players who beat their draft cost repeatedly rather than once.
 
 ### `matchup_backtest`
-Validates `separation_report`'s `matchup_adjusted_score` against real outcomes: does
-talent + schedule difficulty predict actual finish better than talent alone? Talent
-comes from the *prior* season's separation score only, schedule difficulty from the
-same leakage-free `strength_of_schedule` the live recommender uses — nothing here has
-seen the season it's scoring. Reports Spearman correlation and top-N precision for
-both metrics side by side, plus the players where schedule swung the pick most.
+Validates whether blending schedule difficulty into talent predicts actual finish
+better than talent alone. Talent comes from the *prior* season's separation score
+only, schedule difficulty from the same leakage-free `strength_of_schedule` the live
+recommender uses — nothing here has seen the season it's scoring. Reports Spearman
+correlation and top-N precision for both metrics side by side, plus the players
+where schedule swung the pick most. 2021-2024 result for WR: talent alone wins —
+`separation_report` ranks by `sep_score` accordingly. Re-run this if the model
+changes to see whether that still holds.
 
 ### `resolve_names`
 Check how names resolve before trusting a paste sync. Reports match type per name.

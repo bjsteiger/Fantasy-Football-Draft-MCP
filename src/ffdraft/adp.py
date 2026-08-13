@@ -280,9 +280,13 @@ def matchup_value_backtest(seasons: list[int], position: str = "WR",
                            sc: Scoring | None = None) -> pd.DataFrame:
     """Did talent + schedule-adjusted matchup predict finish better than talent alone?
 
-    Backtests the matchup_adjusted_score exposed by separation_report, the same way
+    Same idea as separation_report's schedule adjustment (talent z-score plus
+    schedule-difficulty z-score), tested against real outcomes the same way
     adp_vs_finish backtests consensus rank: nothing here has seen the season it's
-    scoring.
+    scoring. A 2021-2024 WR run found talent alone predicts better, so
+    separation_report ranks by talent and shows matchup_z for reference only --
+    this function is what proved that, and it's here to re-check if the model
+    or the data underlying it changes.
 
     Talent (`talent_z`) is that player's separation score from the *prior* season
     only -- what a drafter actually knew in August, not a mid-season update. Matchup

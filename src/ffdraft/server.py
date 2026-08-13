@@ -425,9 +425,12 @@ def separation_report(position: str = "WR", player_name: str | None = None,
     for a WR/CB matchup chart -- team-level and season-long rather than man-coverage
     and week-to-week, since which specific corner covers which receiver on a given
     snap isn't in any open dataset (that needs per-play charting only commercial
-    providers do). `matchup_adjusted_score` blends the two: how good the receiver
-    is, adjusted for how hard his schedule is, in one number you can rank WRs by
-    for a draft-day "worth the pickup this year" call.
+    providers do).
+
+    matchup_z is informational only -- players are ranked by sep_score (talent), not
+    by a blended score. A backtest (see matchup_backtest) found that folding schedule
+    difficulty into a combined ranking made it a worse predictor of actual finish
+    than talent alone for WR, so it isn't blended into the sort here.
 
     Man-versus-zone splits are not reproducible from open data — that needs
     per-play coverage charting.
@@ -468,18 +471,16 @@ def separation_report(position: str = "WR", player_name: str | None = None,
             "tprr", "rec_targets", "routes_est", "sep_score"]
     if sos_col in sos.columns and not cur.empty:
         cur = cur.merge(sos[sos_cols], on="team", how="left").rename(columns={sos_col: "matchup_z"})
-        talent_z = (cur["sep_score"] - cur["sep_score"].mean()) / cur["sep_score"].std(ddof=0)
-        cur["matchup_adjusted_score"] = talent_z.fillna(0) + cur["matchup_z"].fillna(0)
-        cols += ["matchup_z", "matchup_adjusted_score"]
-        cur = cur.sort_values("matchup_adjusted_score", ascending=False)
-    else:
-        cur = cur.sort_values("sep_score", ascending=False)
+        cols.append("matchup_z")
+    cur = cur.sort_values("sep_score", ascending=False)
     return json.dumps({
         "season": recent, "position": pos, "schedule_season": CURRENT_SEASON,
         "note": "sep_score is a within-season z-score blending separation, YPRR, TPRR "
-                "and YAC over expected. matchup_z: positive = easier upcoming schedule "
-                "for this position, negative = tougher. matchup_adjusted_score = talent "
-                "z-score + matchup_z, higher is a better season-long pickup.",
+                "and YAC over expected -- players are ranked by this. matchup_z is "
+                "informational only (positive = easier upcoming schedule for the "
+                "position, negative = tougher): a backtest (matchup_backtest) found "
+                "blending it into the ranking made predictions worse for WR, not "
+                "better, so it's shown for reference but not part of the sort.",
         "players": _rows(cur, cols, limit),
     }, indent=2, default=str)
 
@@ -544,18 +545,20 @@ def draft_value_history(seasons: str = "2021,2022,2023,2024", group_by: str = "d
 @mcp.tool()
 def matchup_backtest(seasons: str = "2021,2022,2023,2024", position: str = "WR",
                      top_n: int = 24) -> str:
-    """Backtest: does matchup_adjusted_score (from separation_report) beat talent alone?
+    """Backtest: does talent + schedule difficulty predict finish better than talent alone?
 
-    separation_report's matchup_adjusted_score assumes schedule difficulty adds real
-    predictive value on top of receiver talent. This checks that assumption against
-    real seasons instead of taking it on faith: for each season, talent (`talent_z`)
-    is that player's separation score from the *prior* season only, and matchup
-    difficulty (`matchup_z`) is the same leakage-free strength_of_schedule the live
-    recommender uses, both compared to actual fantasy points scored.
+    This checks, against real seasons, whether blending schedule difficulty into a
+    receiver's talent score improves how well it predicts actual finish. For each
+    season, talent (`talent_z`) is that player's separation score from the *prior*
+    season only, and matchup difficulty (`matchup_z`) is the same leakage-free
+    strength_of_schedule the live recommender uses, both compared to actual fantasy
+    points scored.
 
     A positive `improvement_corr` / `improvement_precision` means the schedule
     adjustment earns its keep. Near zero or negative means talent alone predicts
-    just as well, and matchup_adjusted_score isn't adding real signal.
+    just as well or better -- which is what a 2021-2024 WR backtest found, so
+    separation_report ranks by talent (sep_score) alone and shows matchup_z as
+    reference only. Re-run this if the underlying model changes.
     """
     league, _ = _settings()
     yrs = [int(s) for s in seasons.split(",") if s.strip()]
