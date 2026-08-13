@@ -311,7 +311,7 @@ def matchup_value_backtest(seasons: list[int], position: str = "WR",
             if prior.empty:
                 print(f"  ! {season}: no qualified {position}s in {season - 1} to score talent from")
                 continue
-            talent = prior[["player_id", "name", "sep_score"]].rename(
+            talent = prior[["player_id", "sep_score"]].rename(
                 columns={"sep_score": "talent_z"})
 
             fin = season_finish(season, sc)
