@@ -2,6 +2,23 @@
 
 ## Setup
 
+**`-bash: pip: command not found`**
+Your system only has `python3`/`pip3` on PATH, or pip isn't installed at all. Use
+`python3 -m pip install -e .`, or better, set up a virtual environment (see below) so
+plain `python`/`pip` work for the rest of these commands.
+
+**`error: externally-managed-environment`**
+macOS with Homebrew Python (and some Linux distros) block system-wide `pip install` by
+design (PEP 668). Use a virtual environment instead of `--break-system-packages`:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -e .
+```
+Activate it (`source .venv/bin/activate`) in every new terminal before running
+`pytest`, `ruff`, or the server. Point `claude_desktop_config.json` at
+`.venv/bin/python`, not your system Python, or Claude Desktop won't see the install.
+
 **`ModuleNotFoundError: No module named 'ffdraft'`**
 Install in editable mode from the repo root: `pip install -e .`
 

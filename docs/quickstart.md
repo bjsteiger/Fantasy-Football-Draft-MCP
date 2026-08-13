@@ -6,12 +6,17 @@ one-time data download.
 ## 1. Install
 
 ```bash
-git clone https://github.com/OWNER/ff-draft-mcp.git
-cd ff-draft-mcp
+git clone https://github.com/zacharytran26/Fantasy-Football-Draft-MCP.git
+cd Fantasy-Football-Draft-MCP
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-Python 3.10 or newer.
+Python 3.10 or newer. Use a virtual environment as shown above -- on macOS with
+Homebrew Python, `pip install -e .` outside a venv fails with
+`error: externally-managed-environment`. See
+[troubleshooting](troubleshooting.md#setup) if `pip` or `python` aren't found.
 
 ## 2. Build the data cache
 

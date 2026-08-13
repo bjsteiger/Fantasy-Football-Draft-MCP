@@ -30,10 +30,10 @@ dependencies = [
 dev = ["pytest>=7.0", "ruff>=0.4", "build"]
 
 [project.urls]
-Homepage = "https://github.com/OWNER/ff-draft-mcp"
-Documentation = "https://github.com/OWNER/ff-draft-mcp/tree/main/docs"
-Issues = "https://github.com/OWNER/ff-draft-mcp/issues"
-Changelog = "https://github.com/OWNER/ff-draft-mcp/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/zacharytran26/Fantasy-Football-Draft-MCP"
+Documentation = "https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/tree/main/docs"
+Issues = "https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/issues"
+Changelog = "https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ffdraft-mcp = "ffdraft.server:main"

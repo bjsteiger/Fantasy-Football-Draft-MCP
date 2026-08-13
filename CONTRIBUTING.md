@@ -3,8 +3,8 @@
 ## Setup
 
 ```bash
-git clone https://github.com/OWNER/ff-draft-mcp.git
-cd ff-draft-mcp
+git clone https://github.com/zacharytran26/Fantasy-Football-Draft-MCP.git
+cd Fantasy-Football-Draft-MCP
 pip install -e .
 pip install pytest ruff
 ```

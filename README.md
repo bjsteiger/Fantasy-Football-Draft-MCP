@@ -4,7 +4,7 @@ A live draft assistant. Connect it to Claude, sync your ESPN or Sleeper draft bo
 ask "who should I pick?" at every turn. It answers with a recommendation, the reasoning,
 and the odds each player survives to your next pick.
 
-[![CI](https://github.com/OWNER/ff-draft-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/ff-draft-mcp/actions/workflows/ci.yml)
+[![CI](https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -16,8 +16,14 @@ from **247,284 plays** across five seasons, priced against real 2026 preseason c
 ## Quick start
 
 ```bash
-git clone https://github.com/OWNER/ff-draft-mcp.git
-cd ff-draft-mcp
+git clone https://github.com/zacharytran26/Fantasy-Football-Draft-MCP.git
+cd Fantasy-Football-Draft-MCP
+
+# Use a virtual environment (required on macOS with Homebrew Python, and
+# recommended everywhere else) -- see docs/quickstart.md if `pip`/`python`
+# aren't found or you hit "externally-managed-environment".
+python3 -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e .
 
 # One-time data build (~3-6 min; downloads 5 seasons, then caches)
