@@ -361,7 +361,14 @@ def sync_espn(league_id: str, season: int = CURRENT_SEASON,
     espn_map = xwalk.dropna(subset=["espn_id"]).set_index("espn_id")["full_name"].to_dict()
     out = []
     for p in picks:
-        pid = str(p.get("playerId"))
+        # ESPN returns every slot in the draft order, filled or not -- a slot
+        # nobody has picked yet comes back with playerId -1, not omitted. Treating
+        # those as real (if unmatched) picks made the server think the draft was
+        # far ahead of where it actually was.
+        pid = p.get("playerId")
+        if pid is None or pid == -1:
+            continue
+        pid = str(pid)
         out.append({
             "overall": p.get("overallPickNumber"),
             "slot": None,
