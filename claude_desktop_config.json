@@ -1,13 +1,13 @@
 {
   "mcpServers": {
     "fantasy-draft": {
-      "command": "/Users/zacharytran/Documents/GitHub/Fantasy-Football-Draft-MCP/.venv/bin/python",
+      "command": "/Users/zacharytran/Desktop/Fantasy-Football-Draft-MCP/.venv/bin/python",
       "args": ["-m", "ffdraft.server"],
       "env": {
         "FFDRAFT_SEASON": "2026",
         "ESPN_SWID": "optional-for-private-espn-leagues",
         "ESPN_S2": "optional-for-private-espn-leagues",
-        "PYTHONPATH": "/Users/zacharytran/Documents/GitHub/Fantasy-Football-Draft-MCP/src"
+        "PYTHONPATH": "/Users/zacharytran/Desktop/Fantasy-Football-Draft-MCP/src"
       }
     }
   }
