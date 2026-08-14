@@ -21,6 +21,42 @@ def _norm_cdf(x: float) -> float:
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
+def touchdown_luck_multiplier(rz_touches: pd.Series, rz_td: pd.Series,
+                              baseline_rate: pd.Series, weight: float,
+                              min_touches: int = 8) -> pd.Series:
+    """How far a player's red zone conversion rate sits from his position's baseline,
+    expressed as a bounded multiplier on projected production.
+
+    A player who scored on far more of his red zone touches than his position
+    converts on average gets pulled down; one who scored on far fewer gets pulled up.
+    Below min_touches a rate is mostly noise, so those players sit neutral (1.0)
+    rather than swinging on a two- or three-touch sample.
+
+    weight is the maximum fractional move in either direction, same convention as
+    every other environment multiplier in project() -- z-scored, clipped to +/-2.5,
+    then scaled by weight so this factor can't dominate the projection on its own.
+    """
+    touches = rz_touches.fillna(0.0)
+    td = rz_td.fillna(0.0)
+    qualifies = touches >= min_touches
+    expected = touches * baseline_rate.fillna(0.0)
+    surplus = td - expected
+
+    # Z-score over the qualifying population only, so the non-qualifying players
+    # pinned to neutral below don't drag the scale everyone else is measured on.
+    pool = surplus.where(qualifies)
+    sd = pool.std(ddof=0)
+    if sd and sd > 0:
+        z = (surplus - pool.mean()) / sd
+    else:
+        z = pd.Series(0.0, index=surplus.index)
+    # Sign-flipped: a positive surplus (overperformed) should push the multiplier
+    # below 1, a negative surplus (underperformed) should push it above 1.
+    z = (-z).clip(-2.5, 2.5) / 2.5
+    mult = 1 + z * weight
+    return mult.where(qualifies, 1.0)
+
+
 def apply_current_team(tbl: pd.DataFrame, depth_chart: pd.DataFrame) -> pd.DataFrame:
     """Override each player's team with the current depth chart, when available.
 
@@ -131,6 +167,20 @@ def build_player_table(league: LeagueSettings, weights: ModelWeights,
     sos_cols = ["team", "divisional_games"] + [c for c in sos.columns if c.endswith("_z")]
     tbl = tbl.merge(sos[sos_cols], on="team", how="left")
 
+    # --- red zone role, for the touchdown-luck regression in project()
+    # Recency-weighted the same way as touches/target_share: every (player, season)
+    # the player had *any* offensive role gets a row, filling zero red zone touches
+    # rather than dropping the season, so a player's weighting window matches his
+    # other features exactly instead of narrowing to just his red-zone seasons.
+    rz = profiles[["player_id", "season"]].drop_duplicates().merge(
+        features.player_redzone_role(pbp), on=["player_id", "season"], how="left")
+    rz["rz_touches"] = rz["rz_touches"].fillna(0.0)
+    rz["rz_td"] = rz["rz_td"].fillna(0.0)
+    rz_w = pd.concat([
+        _season_weighted(rz, "rz_touches"), _season_weighted(rz, "rz_td"),
+    ], axis=1).reset_index()
+    tbl = tbl.merge(rz_w, on="player_id", how="left")
+
     # --- separation and route efficiency (pass catchers only)
     try:
         from . import separation as sep_mod
@@ -175,7 +225,7 @@ def build_player_table(league: LeagueSettings, weights: ModelWeights,
         "injury_risk": 0.22, "games_missed_rate": 0.10, "report_rate": 0.12,
         "heavy_seasons": 0.0, "recent_burden": 0.5, "seasons_played": 0,
         "games_last": 0, "age": 22.0, "startable_rate": np.nan, "fp_mean": np.nan,
-        "divisional_games": 6.0,
+        "divisional_games": 6.0, "rz_touches": 0.0, "rz_td": 0.0,
     }
     for col, val in defaults.items():
         if col in tbl.columns:
@@ -285,8 +335,29 @@ def project(tbl: pd.DataFrame, league: LeagueSettings, weights: ModelWeights) ->
             sep_z.loc[catchers] = t.loc[catchers, "sep_score"].clip(-2.5, 2.5)
     t["m_separation"] = bounded(sep_z, w.separation)
 
+    # Touchdown luck: a player's own red zone conversion rate, regressed toward what
+    # his position converts on average. Touchdowns dominate fantasy scoring and are
+    # much noisier than yardage — a back who scored on 40% of his red zone carries
+    # one season is not a repeatable event, he's a running back who is about to score
+    # on a lot fewer of them next season. Uses the same "starter-caliber cohort" the
+    # baseline regression above uses for pos_target, not the league as a whole,
+    # because a bench-caliber player's red zone rate is exactly the kind of small,
+    # unrepresentative sample that shouldn't set the bar a real starter is judged against.
+    rz_baseline = {}
+    for pos, chunk in t.groupby("position"):
+        ranked = chunk.sort_values("fp_mean", ascending=False)
+        n = min(starter_n.get(pos, 30), max(3, len(ranked)))
+        top = ranked.head(n)
+        touch_sum = top["rz_touches"].sum()
+        rz_baseline[pos] = float(top["rz_td"].sum() / touch_sum) if touch_sum > 0 else 0.18
+    t["rz_baseline_rate"] = t["position"].map(rz_baseline)
+    t["rz_td_rate"] = t["rz_td"] / t["rz_touches"].replace(0, np.nan)
+    t["m_td_luck"] = touchdown_luck_multiplier(
+        t["rz_touches"], t["rz_td"], t["rz_baseline_rate"], w.td_luck)
+
     t["adj_ppg"] = (t["baseline_ppg"] * t["m_oline"] * t["m_volume"] * t["m_schedule"]
-                    * t["m_divisional"] * t["m_injury"] * t["m_age"] * t["m_separation"])
+                    * t["m_divisional"] * t["m_injury"] * t["m_age"] * t["m_separation"]
+                    * t["m_td_luck"])
     t["proj_points"] = t["adj_ppg"] * t["exp_games"]
 
     # Full-PPR equivalent of the same projection. Published consensus rankings are
@@ -535,7 +606,7 @@ def explain(row: pd.Series) -> str:
     for label, key in [
         ("O-line", "m_oline"), ("volume/pace", "m_volume"),
         ("schedule", "m_schedule"), ("age curve", "m_age"),
-        ("separation", "m_separation"),
+        ("separation", "m_separation"), ("touchdown regression", "m_td_luck"),
     ]:
         v = row.get(key)
         if v is not None and np.isfinite(v) and abs(v - 1) > 0.02:

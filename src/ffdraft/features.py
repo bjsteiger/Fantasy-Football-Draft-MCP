@@ -225,6 +225,51 @@ def _defense_ratings(pbp: pd.DataFrame, weekly: pd.DataFrame, sc: Scoring) -> pd
     return out
 
 
+def player_redzone_role(pbp: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Red zone touches and touchdowns, per player-season, from raw plays.
+
+    Box scores give season touchdown totals but nothing about *where* they came
+    from — a running back who scored on 40% of his red zone carries and one who
+    scored on 15% can post an identical touchdown line if the second one just got
+    more chances near the goal line. That distinction is what the touchdown-luck
+    regression in model.project needs: 'touches' near the end zone and how many of
+    them actually became scores, so a player's rate can be compared to what his
+    position converts on average.
+
+    A touch is a carry (rusher_player_id on a run play) or a target (receiver_player_id
+    on a pass play), matching how touches are already counted for workload burden in
+    injury_risk. Red zone = yardline_100 <= 20. Receiving touchdowns require the pass
+    to be complete — an incomplete red zone target is a real look that just didn't
+    convert, not a non-event, so it still counts as a touch with rz_td=0.
+    """
+    if pbp is None:
+        return _memo("redzone_role", lambda: _player_redzone_role(sources.play_by_play()))
+    return _player_redzone_role(pbp)
+
+
+def _player_redzone_role(pbp: pd.DataFrame) -> pd.DataFrame:
+    rz = pbp[pbp["yardline_100"].notna() & (pbp["yardline_100"] <= 20)]
+
+    runs = rz[(rz["play_type"] == "run") & rz["rusher_player_id"].notna()]
+    rush_g = runs.groupby(["season", "rusher_player_id"], observed=True).agg(
+        rz_rush_att=("rush_touchdown", "size"),
+        rz_rush_td=("rush_touchdown", "sum"),
+    ).reset_index().rename(columns={"rusher_player_id": "player_id"})
+
+    passes = rz[(rz["play_type"] == "pass") & rz["receiver_player_id"].notna()]
+    rec_g = passes.groupby(["season", "receiver_player_id"], observed=True).agg(
+        rz_targets=("pass_touchdown", "size"),
+        rz_rec_td=("pass_touchdown", "sum"),
+    ).reset_index().rename(columns={"receiver_player_id": "player_id"})
+
+    out = rush_g.merge(rec_g, on=["season", "player_id"], how="outer")
+    for c in ("rz_rush_att", "rz_rush_td", "rz_targets", "rz_rec_td"):
+        out[c] = out[c].fillna(0.0)
+    out["rz_touches"] = out["rz_rush_att"] + out["rz_targets"]
+    out["rz_td"] = out["rz_rush_td"] + out["rz_rec_td"]
+    return out[["season", "player_id", "rz_touches", "rz_td"]]
+
+
 def strength_of_schedule(target_season: int, defense: pd.DataFrame) -> pd.DataFrame:
     key = f"sos_{target_season}_{len(defense)}"
     if key in _DERIVED:

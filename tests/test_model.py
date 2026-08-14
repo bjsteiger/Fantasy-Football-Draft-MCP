@@ -10,6 +10,7 @@ from ffdraft.model import (
     expected_best_at_next_pick,
     survival_probability,
     survival_probability_vec,
+    touchdown_luck_multiplier,
 )
 
 
@@ -130,6 +131,70 @@ class TestCurrentTeam:
         out = apply_current_team(tbl, dc).set_index("player_id")
         assert out.loc["p1", "team"] == "NEW"
         assert out.loc["p2", "team"] == "SAME"
+
+
+class TestTouchdownLuck:
+    """touchdown_luck_multiplier is a cross-sectional z-score, like every other
+    environment multiplier in project() -- it needs a real spread of players to
+    compare against, so single-player cases are exercised as one row in a small
+    board rather than in isolation.
+    """
+
+    def test_overperformer_gets_discounted_relative_to_the_field(self):
+        # Player 0 converted way more red zone touches than baseline predicts;
+        # players 1-2 landed close to it.
+        touches = pd.Series([20.0, 20.0, 20.0])
+        td = pd.Series([10.0, 4.0, 5.0])         # baseline expects 4 on 20 touches
+        baseline = pd.Series([0.20, 0.20, 0.20])
+        m = touchdown_luck_multiplier(touches, td, baseline, weight=0.06)
+        assert m.iloc[0] < 1.0
+        assert m.iloc[0] < m.iloc[1]
+
+    def test_underperformer_gets_boosted_relative_to_the_field(self):
+        touches = pd.Series([20.0, 20.0, 20.0])
+        td = pd.Series([1.0, 4.0, 5.0])          # baseline expects 4 on 20 touches
+        baseline = pd.Series([0.20, 0.20, 0.20])
+        m = touchdown_luck_multiplier(touches, td, baseline, weight=0.06)
+        assert m.iloc[0] > 1.0
+        assert m.iloc[0] > m.iloc[1]
+
+    def test_small_sample_is_pinned_neutral_even_in_a_skewed_field(self):
+        """A two-touch, two-score '100%' sample sits at exactly 1.0, regardless of
+        how much variance the qualifying players around it carry."""
+        touches = pd.Series([2.0, 20.0, 20.0])
+        td = pd.Series([2.0, 10.0, 1.0])
+        baseline = pd.Series([0.20, 0.20, 0.20])
+        m = touchdown_luck_multiplier(touches, td, baseline, weight=0.06, min_touches=8)
+        assert m.iloc[0] == 1.0
+
+    def test_weight_zero_disables_the_adjustment(self):
+        touches = pd.Series([20.0, 20.0])
+        td = pd.Series([10.0, 1.0])
+        baseline = pd.Series([0.20, 0.20])
+        m = touchdown_luck_multiplier(touches, td, baseline, weight=0.0)
+        assert (m == 1.0).all()
+
+    def test_never_exceeds_the_configured_weight(self):
+        touches = pd.Series([50.0, 50.0, 50.0])
+        td = pd.Series([49.0, 0.0, 10.0])   # one huge overperformer, one huge underperformer
+        baseline = pd.Series([0.20, 0.20, 0.20])
+        m = touchdown_luck_multiplier(touches, td, baseline, weight=0.06)
+        assert ((m - 1.0).abs() <= 0.06 + 1e-9).all()
+
+    def test_missing_baseline_does_not_produce_nan(self):
+        touches = pd.Series([20.0, 20.0])
+        td = pd.Series([5.0, 8.0])
+        baseline = pd.Series([np.nan, 0.20])
+        m = touchdown_luck_multiplier(touches, td, baseline, weight=0.06)
+        assert np.isfinite(m).all()
+
+    def test_uniform_field_is_neutral(self):
+        """Everyone matches the baseline exactly -- no spread, no adjustment."""
+        touches = pd.Series([20.0, 30.0, 40.0])
+        td = pd.Series([4.0, 6.0, 8.0])     # each exactly 20%
+        baseline = pd.Series([0.20, 0.20, 0.20])
+        m = touchdown_luck_multiplier(touches, td, baseline, weight=0.06)
+        assert (m == 1.0).all()
 
 
 class TestSyntheticAdp:

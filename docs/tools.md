@@ -35,7 +35,12 @@ publishes new data mid-season.
 
 ### `model_settings`
 Retune factor weights: `consistency_weight`, `injury_weight`, `oline_weight`,
-`schedule_weight`, `pace_weight`. Rebuilds the board.
+`schedule_weight`, `pace_weight`, `td_luck_weight`. Rebuilds the board.
+
+`td_luck_weight` (default 0.06) controls how hard a player's red zone touchdown
+rate gets pulled toward what his position converts on average — see Touchdown luck
+in [methodology.md](methodology.md). Set it to 0 for a board scored on raw history
+with no touchdown-luck correction.
 
 `qb_boost` is different from the rest — those all scale a real per-player signal
 (O-line, pace, etc.); `qb_boost` is a direct fractional lift on QB `draft_score`
@@ -89,7 +94,10 @@ Simulate every remaining pick from your slot. `strategy`: `balanced`, `zero_rb`,
 
 ### `player_report`
 Every modelled factor for one player: production, role, environment multipliers, injury
-components, separation, draft capital for rookies.
+components, separation, draft capital for rookies. Includes red zone role
+(`rz_touches`, `rz_td`, `rz_td_rate`) against the position's baseline conversion rate
+(`rz_baseline_rate`) and the resulting `m_td_luck` multiplier — surfaced in the plain-
+language `summary` as "touchdown regression" whenever it moves the projection.
 
 ### `compare_players`
 Two to four players head to head, with a verdict.

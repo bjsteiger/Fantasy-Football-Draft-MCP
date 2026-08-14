@@ -61,6 +61,23 @@ where running back seasons tend to go wrong.
 
 **Separation.** For pass catchers only, and only those clearing the route threshold.
 
+**Touchdown luck.** Red zone touches and touchdowns, from raw plays rather than the
+season touchdown total box scores publish. A player's own red zone conversion rate
+is regressed toward what his position converts on average, computed from the same
+starter-caliber cohort `pos_target` above uses, not the whole league. Touchdowns are
+the noisiest thing a player does — worth more to the score than anything else, and
+far more volatile year to year than yardage — so this is deliberately conservative:
+below 8 red zone touches a rate is a coin flip and sits neutral, and even above that
+threshold the correction is bounded like every other multiplier here, not a full
+reset to the baseline.
+
+> For example: Justin Jefferson's five-year red zone role converts at 16.9%, against
+> a receiver baseline of 25.3% computed from the same starter cohort — real target
+> volume (145 touches/season recency-weighted) that hasn't translated into
+> touchdowns at the rate his peers' does. `m_td_luck` lifts his projection 3.6% for
+> it, a small correction bounded by `td_luck_weight` like every other factor here,
+> not a claim that he's about to lead the league in scores.
+
 ### 3. Consistency
 
 The floor score: how often a player delivers a usable week. Startable rate (45%), floor

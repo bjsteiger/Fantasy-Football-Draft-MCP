@@ -145,6 +145,14 @@ class ModelWeights:
     injury: float = 0.10         # injury history + workload burden
     separation: float = 0.05     # route-win quality for WR/TE (NGS separation, YPRR, TPRR)
     age: float = 0.08            # position age curve
+    # Red zone touchdown rate regressed toward the position's baseline conversion
+    # rate (from real per-player red zone touches/TDs, not a belief you supply --
+    # unlike qb_boost below). A player who scored on far more or fewer of his red
+    # zone touches than his position converts on average gets pulled toward that
+    # baseline, since a single season's conversion rate is one of the noisiest
+    # signals in the model and touchdowns are worth more to the score than
+    # anything else a player does.
+    td_luck: float = 0.06
     # How the final ranking trades off ceiling vs. floor. 0 = pure expected points,
     # 1 = pure week-to-week reliability. The user asked for consistency, so this leans high.
     consistency_weight: float = 0.35

@@ -860,8 +860,9 @@ def player_report(player_name: str) -> str:
               "rush_rate", "divisional_games",
               "sep_score", "avg_separation", "avg_cushion", "yprr", "tprr", "yac_oe",
               "is_rookie", "pick", "draft_round", "college",
+              "rz_touches", "rz_td", "rz_td_rate", "rz_baseline_rate",
               "m_oline", "m_volume", "m_schedule", "m_divisional", "m_injury", "m_age",
-              "m_separation", "vor"]
+              "m_separation", "m_td_luck", "vor"]
     out = _rows(pd.DataFrame([r]), [f for f in fields if f in r.index], 1)[0]
     out["summary"] = model.explain(r)
     return json.dumps(out, indent=2)
@@ -1007,8 +1008,15 @@ def plan_my_draft(strategy: str = "balanced") -> str:
 @mcp.tool()
 def model_settings(consistency_weight: float | None = None, injury_weight: float | None = None,
                    oline_weight: float | None = None, schedule_weight: float | None = None,
-                   pace_weight: float | None = None, qb_boost: float | None = None) -> str:
+                   pace_weight: float | None = None, td_luck_weight: float | None = None,
+                   qb_boost: float | None = None) -> str:
     """Tune how much each factor moves a player. Rebuilds the board.
+
+    td_luck_weight controls how hard a player's red zone touchdown rate gets
+    regressed toward what his position converts on average (player_report shows
+    rz_touches/rz_td/rz_td_rate/rz_baseline_rate so you can see the raw numbers
+    behind the adjustment). Set it to 0 to score players on raw history with no
+    touchdown-luck correction at all.
 
     qb_boost is different from the others: they all adjust the projection from a
     real per-player signal (O-line, pace, etc.); qb_boost is a direct fractional
@@ -1023,7 +1031,8 @@ def model_settings(consistency_weight: float | None = None, injury_weight: float
     league, weights = _settings()
     for name, val in [("consistency_weight", consistency_weight), ("injury", injury_weight),
                       ("oline", oline_weight), ("schedule", schedule_weight),
-                      ("pace_volume", pace_weight), ("qb_boost", qb_boost)]:
+                      ("pace_volume", pace_weight), ("td_luck", td_luck_weight),
+                      ("qb_boost", qb_boost)]:
         if val is not None:
             setattr(weights, name, float(val))
     save_settings(league, weights)

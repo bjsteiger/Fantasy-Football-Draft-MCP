@@ -4,6 +4,23 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning is
 [semantic](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+**Touchdown luck**
+- New environment multiplier (`m_td_luck`, weight `td_luck` / `td_luck_weight` in
+  `model_settings`, default 0.06): a player's red zone touch/touchdown rate, from raw
+  play-by-play, regressed toward what his position converts on average — computed
+  from the same starter-caliber cohort the baseline projection regresses toward.
+  Below 8 red zone touches a rate is treated as noise and sits neutral.
+- `player_report` now shows `rz_touches`, `rz_td`, `rz_td_rate`, `rz_baseline_rate`
+  alongside the multiplier, and `explain()`'s plain-language summary surfaces it as
+  "touchdown regression" whenever it's non-trivial.
+- New `features.player_redzone_role` (raw plays → per-player-season red zone
+  touches/TDs) and `model.touchdown_luck_multiplier` (the bounded z-score
+  adjustment, independently unit-tested).
+
 ## [1.0.0] — 2026-08-12
 
 First release. A live fantasy football draft analyst exposed over MCP.
