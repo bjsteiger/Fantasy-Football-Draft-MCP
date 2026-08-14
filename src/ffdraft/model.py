@@ -223,6 +223,17 @@ def project(tbl: pd.DataFrame, league: LeagueSettings, weights: ModelWeights) ->
         # Rookie availability is already capital-scaled; don't shrink them like vets.
         shrink = shrink.mask(is_rook, 0.60)
 
+    # A veteran who hasn't played as recently as the board's freshest players is a
+    # real unknown -- retired, hurt long-term, or just out of the league -- and last
+    # season's box score can't tell us which. Discounted hard (60% per season stale,
+    # compounding) rather than left at face value: without this, a two-seasons-
+    # retired running back's still-strong 2020 form outprojected most of a real
+    # board in a 2022 backtest and became the model's runaway top recommendation.
+    # Rookies are unaffected (NaN last_season -> stale 0, and they're already
+    # capital-scaled above, not derived from fp_mean).
+    stale = (t["last_season"].max() - t["last_season"]).clip(lower=0).fillna(0)
+    t["baseline_ppg"] = t["baseline_ppg"] * (0.4 ** stale)
+
     # ---- environment multipliers, each bounded by its configured weight
     def bounded(series: pd.Series, weight: float) -> pd.Series:
         z = series.fillna(0).clip(-2.5, 2.5) / 2.5

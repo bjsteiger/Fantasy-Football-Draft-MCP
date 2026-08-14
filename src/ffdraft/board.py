@@ -154,9 +154,25 @@ SYNTHETIC_ADP_CURVE = {
 }
 
 
-def synthetic_adp(position: str, pos_rank: float) -> float:
+def synthetic_adp(position: str, pos_rank: float, seasons_stale: float = 0.0) -> float:
+    """Draft-cost estimate for a player missing from real ADP, from the model's own
+    positional rank -- with no real market behind it, this is only trustworthy for
+    someone still actually in the league.
+
+    seasons_stale is how far behind the board's freshest player this one's last
+    active season is (0 for someone who played as recently as anyone else on the
+    board). A big flat penalty per season, not a multiplier on the base estimate:
+    real drafters don't discount a year-old star by some percentage, they stop
+    trusting him at all, because "didn't play last year" could mean retired, hurt
+    long-term, or out of the league, and the box scores alone can't tell which.
+    Without this, a retired player's still-strong last-known form could earn him
+    the single best synthetic ADP on the board -- his own rank produces its own
+    inflated market price -- which is what let a running back retired for two
+    seasons come back as the model's runaway top recommendation in a backtest.
+    """
     a, b = SYNTHETIC_ADP_CURVE.get(position, (3.0, 1.05))
-    return float(a * max(1.0, pos_rank) ** b)
+    base = a * max(1.0, pos_rank) ** b
+    return float(base + 200.0 * max(0.0, seasons_stale))
 
 
 def attach_adp(board: pd.DataFrame, adp: pd.DataFrame | None) -> pd.DataFrame:
@@ -170,7 +186,13 @@ def attach_adp(board: pd.DataFrame, adp: pd.DataFrame | None) -> pd.DataFrame:
         b["adp"] = np.nan
         b["adp_source"] = "modelled"
 
-    fallback = [synthetic_adp(p, r) for p, r in zip(b["position"], b["pos_rank"])]
+    if "last_season" in b.columns:
+        freshest = b["last_season"].max()
+        stale = (freshest - b["last_season"]).clip(lower=0).fillna(0)
+    else:
+        stale = pd.Series(0.0, index=b.index)
+    fallback = [synthetic_adp(p, r, s)
+               for p, r, s in zip(b["position"], b["pos_rank"], stale)]
     b["adp"] = b["adp"].fillna(pd.Series(fallback, index=b.index))
     b["adp_delta"] = b["adp"] - b["overall_rank"]
     return b
