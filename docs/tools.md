@@ -37,6 +37,17 @@ publishes new data mid-season.
 Retune factor weights: `consistency_weight`, `injury_weight`, `oline_weight`,
 `schedule_weight`, `pace_weight`. Rebuilds the board.
 
+`qb_boost` is different from the rest — those all scale a real per-player signal
+(O-line, pace, etc.); `qb_boost` is a direct fractional lift on QB `draft_score`
+you supply because you believe the position is worth more than the projection
+says, not because of any one player's inputs. It exists because
+`champion_strategies`/`draft_backtest` can show whether QB has actually beaten
+its draft cost across a specific league's real history — verify that before
+setting it above 0, since it isn't a universal constant. Stacks with, doesn't
+replace, the roster-need discount that already stops the model wanting a second
+QB once you have one — a boost makes QB1 more competitive, it doesn't undo the
+one-starting-slot logic.
+
 ## During the draft
 
 ### `on_the_clock`

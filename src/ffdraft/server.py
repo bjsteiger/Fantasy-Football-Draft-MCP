@@ -1007,12 +1007,23 @@ def plan_my_draft(strategy: str = "balanced") -> str:
 @mcp.tool()
 def model_settings(consistency_weight: float | None = None, injury_weight: float | None = None,
                    oline_weight: float | None = None, schedule_weight: float | None = None,
-                   pace_weight: float | None = None) -> str:
-    """Tune how much each factor moves a player. Rebuilds the board."""
+                   pace_weight: float | None = None, qb_boost: float | None = None) -> str:
+    """Tune how much each factor moves a player. Rebuilds the board.
+
+    qb_boost is different from the others: they all adjust the projection from a
+    real per-player signal (O-line, pace, etc.); qb_boost is a direct fractional
+    lift on QB draft_score you supply because you believe the position is worth
+    more than the projection says, not because of any single player's own inputs.
+    Comes from champion_strategies/draft_backtest analysis: check whether QB has
+    actually beaten its draft cost across your league's real history (not just
+    hit rate in general -- that alone doesn't justify this) before setting it
+    above 0. It stacks with, and doesn't replace, the roster-need discount that
+    already stops the model from wanting a second QB once you have one.
+    """
     league, weights = _settings()
     for name, val in [("consistency_weight", consistency_weight), ("injury", injury_weight),
                       ("oline", oline_weight), ("schedule", schedule_weight),
-                      ("pace_volume", pace_weight)]:
+                      ("pace_volume", pace_weight), ("qb_boost", qb_boost)]:
         if val is not None:
             setattr(weights, name, float(val))
     save_settings(league, weights)

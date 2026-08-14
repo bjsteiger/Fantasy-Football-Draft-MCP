@@ -349,6 +349,8 @@ def project(tbl: pd.DataFrame, league: LeagueSettings, weights: ModelWeights) ->
         t["consistency"].std(ddof=0) or 1.0) * vor_sd
     cw = weights.consistency_weight
     t["draft_score"] = (1 - cw) * t["vor"] + cw * consistency_pts
+    if weights.qb_boost:
+        t.loc[t["position"] == "QB", "draft_score"] *= (1 + weights.qb_boost)
     # Any player whose score is undefined would silently sort to the bottom rather
     # than announcing itself, so fail loudly instead.
     if t["draft_score"].isna().any():

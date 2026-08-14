@@ -148,6 +148,19 @@ class ModelWeights:
     # How the final ranking trades off ceiling vs. floor. 0 = pure expected points,
     # 1 = pure week-to-week reliability. The user asked for consistency, so this leans high.
     consistency_weight: float = 0.35
+    # Direct positional tilt on draft_score, separate from every weight above -- those
+    # all adjust the *projection* from real per-player signals (O-line, pace, etc.);
+    # this instead says "this position is worth more than the projection alone says,"
+    # a belief you supply rather than something derived from the player's own inputs.
+    # Added after a real-draft-history check (draft_backtest/champion_strategies) found
+    # quarterbacks beating their actual draft cost by 20-55 spots in every one of 5
+    # measurable seasons in one league, not just a hot year or two -- consistent with
+    # the broader, well-known dynamic that QB scoring has outpaced ADP since only one
+    # roster slot is required regardless of how much the position scores. Defaults to
+    # 0 (no change from prior behavior); a fractional draft_score multiplier for QB
+    # only, e.g. 0.12 for +12%. Re-run that check before trusting a value here for a
+    # league you haven't verified it in -- this isn't a universal constant.
+    qb_boost: float = 0.0
 
 
 LEAGUES_PATH = STATE_DIR / "leagues.json"
