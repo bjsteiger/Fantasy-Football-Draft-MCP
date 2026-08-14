@@ -123,6 +123,19 @@ where schedule swung the pick most. 2021-2024 result for WR: talent alone wins �
 `separation_report` ranks by `sep_score` accordingly. Re-run this if the model
 changes to see whether that still holds.
 
+### `draft_backtest`
+Replays a real past ESPN draft round by round: what `who_should_i_pick`'s algorithm
+would have recommended given the real board at that exact moment, the true
+hindsight-optimal pick by value over replacement (QB capped at 1 — a second
+quarterback can't start, so it isn't ranked against real RB/WR/TE need), and what
+you actually took, all scored on real points from that season. `league_id` and
+`season` are all it needs — your team and draft slot are auto-detected from
+`ESPN_SWID`/`ESPN_S2`, and league settings (teams, scoring, roster) are read
+straight from ESPN. The board is leak-free: every history-derived input is bounded
+to seasons strictly before the one being predicted, same as `matchup_backtest`.
+K/DST aren't modelled anywhere in this tool, so those rounds report your actual
+pick only. ESPN only, for now.
+
 ### `resolve_names`
 Check how names resolve before trusting a paste sync. Reports match type per name.
 

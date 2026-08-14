@@ -414,3 +414,167 @@ def repeat_value_players(hist: pd.DataFrame, min_seasons: int = 2) -> pd.DataFra
     g = g[g["seasons"] >= min_seasons]
     g["hit_rate"] = g["hits"] / g["seasons"]
     return g.sort_values("avg_value_ratio", ascending=False).reset_index(drop=True)
+
+
+# QB is capped at 1 for the hindsight-optimal side of draft_backtest regardless of
+# league roster caps elsewhere: a second QB scores zero in a 1-QB starting lineup
+# except bye weeks, so ranking it against real RB/WR/TE need by raw value or even
+# league-wide VOR overstates it enormously. This is the same conclusion
+# who_should_i_pick already reaches live via _positional_need's BACKUP_DECAY, just
+# enforced as a hard cap here since the optimal side isn't running that pipeline.
+_OPTIMAL_POSITION_CAPS = {"QB": 1, "RB": 5, "WR": 6, "TE": 2}
+
+
+def draft_backtest(league_id: str, season: int, platform: str = "espn",
+                   top_n: int = 3) -> dict:
+    """Replay a real past draft leak-free: what the live algorithm would have
+    recommended at each of your picks, and the true hindsight-optimal pick by
+    value over replacement, against what you actually took.
+
+    "Leak-free" means the board is built the same way draft_backtest's caller
+    (matchup_backtest's sibling) always should be for a past season: production
+    stats, O-line/pace/defense, and rookie draft curves are bounded to seasons
+    strictly before `season`, and ADP is that season's real preseason snapshot --
+    see model.build_player_table's docstring. Nothing from the season being
+    predicted leaks into the prediction.
+
+    Only ESPN is supported (auto-detects your team and draft slot from
+    ESPN_SWID/ESPN_S2). K/DST aren't modelled anywhere in this tool, so those
+    rounds report your actual pick with no comparison, same as everywhere else.
+    """
+    from . import board as bd
+    from . import model
+    from .config import LeagueSettings, ModelWeights
+
+    if platform != "espn":
+        return {"error": "draft_backtest only supports platform='espn' for now"}
+
+    ctx = bd.espn_league_context(league_id, season)
+    if ctx["my_team_id"] is None:
+        return {"error": "couldn't find your team -- check ESPN_SWID/ESPN_S2 and that "
+                         "you're a member of this league"}
+    if ctx["draft_slot"] is None:
+        return {"error": f"no draft found for league {league_id} in {season}"}
+
+    league = LeagueSettings(
+        name=f"_backtest_{league_id}_{season}", teams=ctx["teams"],
+        rounds=ctx["rounds"], draft_slot=ctx["draft_slot"], snake=True,
+        scoring=Scoring.preset(ctx["scoring"]), starters=ctx["starters"],
+    )
+    weights = ModelWeights()
+
+    tbl = model.build_player_table(league, weights, season=season)
+    proj = model.project(tbl, league, weights)
+    adp = bd.load_adp(season=season, superflex=False)
+    proj = bd.attach_adp(proj, adp)
+    board = bd.convert_adp_format(proj, ctx["scoring"])
+    board["drafted"] = False
+
+    fin = season_finish(season, league.scoring)
+    fin_idx = fin.set_index("_key")
+
+    from .names import normalize as norm_name
+
+    def actual_points(name: str) -> float | None:
+        # A period in initials ("D.J. Moore") normalizes differently from the
+        # no-period form ("DJ Moore") that season_finish's player_display_name
+        # sometimes uses -- try both so a real season isn't reported as missing.
+        for candidate in (name, name.replace(".", "")):
+            key = norm_name(candidate)
+            if key in fin_idx.index:
+                r = fin_idx.loc[key]
+                if isinstance(r, pd.DataFrame):
+                    r = r.iloc[0]
+                return float(r["points"])
+        return None
+
+    board = board.assign(actual_points=board["name"].map(actual_points))
+
+    replacement_rank = league.replacement_ranks()
+    replacement_pts = {}
+    for pos, rank in replacement_rank.items():
+        sub = fin[fin["position"] == pos].sort_values("finish_pos_rank")
+        at_or_after = sub[sub["finish_pos_rank"] >= rank]
+        replacement_pts[pos] = float(at_or_after["points"].iloc[0]) if not at_or_after.empty else 0.0
+    board = board.assign(
+        actual_vor=board.apply(
+            lambda r: (r["actual_points"] - replacement_pts.get(r["position"], 0.0))
+            if pd.notna(r["actual_points"]) else None, axis=1))
+
+    picks = bd.sync_espn(league_id, season=season)
+    my_overalls = set(league.picks_for_slot(league.draft_slot)[:league.rounds])
+
+    state = bd.DraftState(league, name=f"_backtest_scratch_{league_id}_{season}")
+    state.reset()
+    optimal_taken_keys: set[str] = set()
+    my_taken_pos: dict[str, int] = {}
+
+    rows = []
+    your_total, algo_total, optimal_total = 0.0, 0.0, 0.0
+    for p in picks:
+        overall = p["overall"]
+        if overall in my_overalls:
+            b = board.copy()
+            b.loc[b["_key"].isin(state.taken_keys()), "drafted"] = True
+
+            roster = state.my_roster(b[~b["drafted"]])
+            nxt = state.next_pick_for_me()
+            on_clock = state.on_the_clock
+            current = nxt if (nxt is not None and nxt > on_clock) else on_clock
+            after = state.pick_after_next() if nxt == current else nxt
+            recs = model.recommend(b, league, current_pick=current, next_pick=after,
+                                   roster=roster, top_n=top_n)
+            algo_top = recs.iloc[0] if not recs.empty else None
+
+            opt_avail = b[~b["_key"].isin(optimal_taken_keys) & ~b["drafted"]]
+            opt_avail = opt_avail[opt_avail["position"].map(
+                lambda pos: my_taken_pos.get(pos, 0) < _OPTIMAL_POSITION_CAPS.get(pos, 99))]
+            opt_avail = opt_avail.dropna(subset=["actual_vor"]).sort_values(
+                "actual_vor", ascending=False)
+            optimal = opt_avail.iloc[0] if not opt_avail.empty else None
+            if optimal is not None:
+                my_taken_pos[optimal["position"]] = my_taken_pos.get(optimal["position"], 0) + 1
+                optimal_taken_keys.add(optimal["_key"])
+
+            yp = actual_points(p["name"])
+            ap = float(algo_top["actual_points"]) if algo_top is not None and pd.notna(algo_top["actual_points"]) else None
+            op = float(optimal["actual_points"]) if optimal is not None and pd.notna(optimal["actual_points"]) else None
+            # Only count rounds where your own pick was a modelled position --
+            # otherwise a K/DST round would compare your None against algo/optimal's
+            # real skill-position alternative, inflating their totals unfairly.
+            if yp is not None:
+                your_total += yp
+                algo_total += ap or 0.0
+                optimal_total += op or 0.0
+
+            rows.append({
+                "round": (overall - 1) // league.teams + 1, "overall": overall,
+                "your_pick": p["name"], "your_points": round(yp, 1) if yp is not None else None,
+                "algo_pick": (algo_top["name"] if algo_top is not None else None),
+                "algo_points": round(ap, 1) if ap is not None else None,
+                "optimal_pick": (optimal["name"] if optimal is not None else None),
+                "optimal_points": round(op, 1) if op is not None else None,
+                "optimal_vor": (round(float(optimal["actual_vor"]), 1)
+                               if optimal is not None and pd.notna(optimal["actual_vor"]) else None),
+            })
+
+        row = board[board["name"] == p["name"]]
+        resolved = row.iloc[0]["name"] if not row.empty else p["name"]
+        state.record(resolved, overall)
+
+    state.path.unlink(missing_ok=True)
+
+    return {
+        "league": ctx["league_name"], "season": season, "teams": ctx["teams"],
+        "scoring": ctx["scoring"], "your_draft_slot": league.draft_slot,
+        "note": "K/DST aren't modelled -- those rounds show your actual pick only. "
+                "algo_pick is what who_should_i_pick would say live; optimal_pick is "
+                "the true hindsight-best value-over-replacement pick, QB capped at 1 "
+                "since a second quarterback can't start.",
+        "totals": {
+            "your_points": round(your_total, 1),
+            "algo_points": round(algo_total, 1),
+            "optimal_points": round(optimal_total, 1),
+        },
+        "rounds": rows,
+    }

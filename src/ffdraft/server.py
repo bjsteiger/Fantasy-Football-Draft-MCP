@@ -637,6 +637,28 @@ def matchup_backtest(seasons: str = "2021,2022,2023,2024", position: str = "WR",
 
 
 @mcp.tool()
+def draft_backtest(league_id: str, season: int, top_n: int = 3) -> str:
+    """Replay a real past ESPN draft: the algorithm's pick, the true hindsight-best
+    pick, and what you actually took, round by round.
+
+    Give it a past season and your ESPN league id (auto-detects your team and
+    draft slot from ESPN_SWID/ESPN_S2) and it rebuilds the board leak-free for
+    that season -- only data from strictly before it, the same discipline
+    matchup_backtest uses -- then replays the real draft in order. At each of
+    your picks it reports three things: what who_should_i_pick's algorithm would
+    have recommended given the real board at that exact moment, the true
+    hindsight-optimal pick by value over replacement (QB capped at 1 -- a second
+    quarterback can't start, so it isn't ranked against real RB/WR/TE need), and
+    what you actually took. All three are scored on real points from that season.
+
+    K/DST aren't modelled anywhere in this tool, so those rounds report your
+    actual pick only, same as everywhere else. Only ESPN is supported.
+    """
+    out = adp_mod.draft_backtest(league_id, season, top_n=top_n)
+    return json.dumps(out, indent=2, default=str)
+
+
+@mcp.tool()
 def persistent_value_players(seasons: str = "2021,2022,2023,2024",
                              min_seasons: int = 3, limit: int = 20) -> str:
     """Players who beat their draft cost repeatedly, not once.
