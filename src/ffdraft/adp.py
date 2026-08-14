@@ -583,6 +583,14 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
     state.reset()
     optimal_taken_keys: set[str] = set()
     my_taken_pos: dict[str, int] = {}
+    # The algo, like optimal, plays out its own hypothetical draft rather than just
+    # reacting fresh at each of your real turns -- otherwise a player it recommended
+    # in an earlier round, but that nobody in the real draft actually took before
+    # your next turn, is still sitting on the board and gets recommended again. Roster
+    # need is tracked the same way, off the algo's own picks, not your real ones --
+    # its need discount has to reflect what it would actually have rostered by then.
+    algo_taken_keys: set[str] = set()
+    algo_roster: dict[str, int] = {}
 
     rows = []
     your_total, algo_total, optimal_total = 0.0, 0.0, 0.0
@@ -590,16 +598,18 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
         overall = p["overall"]
         if overall in my_overalls:
             b = board.copy()
-            b.loc[b["_key"].isin(state.taken_keys()), "drafted"] = True
+            b.loc[b["_key"].isin(state.taken_keys() | algo_taken_keys), "drafted"] = True
 
-            roster = state.my_roster(b[~b["drafted"]])
             nxt = state.next_pick_for_me()
             on_clock = state.on_the_clock
             current = nxt if (nxt is not None and nxt > on_clock) else on_clock
             after = state.pick_after_next() if nxt == current else nxt
             recs = model.recommend(b, league, current_pick=current, next_pick=after,
-                                   roster=roster, top_n=top_n)
+                                   roster=algo_roster, top_n=top_n)
             algo_top = recs.iloc[0] if not recs.empty else None
+            if algo_top is not None:
+                algo_taken_keys.add(algo_top["_key"])
+                algo_roster[algo_top["position"]] = algo_roster.get(algo_top["position"], 0) + 1
 
             opt_avail = b[~b["_key"].isin(optimal_taken_keys) & ~b["drafted"]]
             opt_avail = opt_avail[opt_avail["position"].map(
