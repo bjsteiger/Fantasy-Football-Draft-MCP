@@ -651,6 +651,12 @@ def draft_backtest(league_id: str, season: int, top_n: int = 3) -> str:
     quarterback can't start, so it isn't ranked against real RB/WR/TE need), and
     what you actually took. All three are scored on real points from that season.
 
+    Each of the three picks also carries a value verdict (preseason ECR against
+    actual finish -- the value_picks steal/bust framing, against real outcomes
+    instead of projections) and team context (that player's team's O-line,
+    pace, and schedule difficulty for the season being tested, leak-free --
+    what team_context reports, but for a past season instead of always today).
+
     K/DST aren't modelled anywhere in this tool, so those rounds report your
     actual pick only, same as everywhere else. Only ESPN is supported.
     """

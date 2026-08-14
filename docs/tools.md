@@ -133,8 +133,15 @@ you actually took, all scored on real points from that season. `league_id` and
 `ESPN_SWID`/`ESPN_S2`, and league settings (teams, scoring, roster) are read
 straight from ESPN. The board is leak-free: every history-derived input is bounded
 to seasons strictly before the one being predicted, same as `matchup_backtest`.
-K/DST aren't modelled anywhere in this tool, so those rounds report your actual
-pick only. ESPN only, for now.
+
+Each of the three picks in a round also carries a value verdict (preseason ECR
+against actual finish — the `value_picks` steal/bust framing, against real
+outcomes instead of projections) and team context (that player's team's O-line
+ranks, pace, and schedule difficulty for the season being tested — the same
+numbers `team_context` reports, but leak-free for a past season instead of
+always reading today's). K/DST aren't modelled anywhere in this tool, so those
+rounds report your actual pick only, with no value or team context. ESPN only,
+for now.
 
 ### `mock_draft`
 Monte Carlo mock draft: the live algorithm against many simulated opponents,

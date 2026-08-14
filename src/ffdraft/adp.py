@@ -438,6 +438,16 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
     see model.build_player_table's docstring. Nothing from the season being
     predicted leaks into the prediction.
 
+    Each of the three picks in a round (yours, the algorithm's, the true
+    optimal's) carries two more things, both computed for the season being
+    tested rather than today:
+      - a value verdict: preseason ECR against actual finish, the same
+        steal/bust framing value_picks uses live, just against real outcomes
+        instead of projections
+      - team context: that player's team's O-line ranks, pace, and schedule
+        difficulty that season -- what team_context reports, but leak-free for
+        a past season instead of always reading the current one
+
     Only ESPN is supported (auto-detects your team and draft slot from
     ESPN_SWID/ESPN_S2). K/DST aren't modelled anywhere in this tool, so those
     rounds report your actual pick with no comparison, same as everywhere else.
@@ -501,6 +511,71 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
             lambda r: (r["actual_points"] - replacement_pts.get(r["position"], 0.0))
             if pd.notna(r["actual_points"]) else None, axis=1))
 
+    ecr = preseason_ecr(season, superflex=False)
+    ecr_idx = ecr.set_index("_key")
+
+    def value_info(name: str | None) -> dict | None:
+        """Preseason draft cost vs. actual finish -- a market-value verdict,
+        distinct from actual_vor (which measures against positional replacement,
+        not against what the room paid for the player)."""
+        if name is None:
+            return None
+        for candidate in (name, name.replace(".", "")):
+            key = norm_name(candidate)
+            if key not in ecr_idx.index:
+                continue
+            e = ecr_idx.loc[key]
+            if isinstance(e, pd.DataFrame):
+                e = e.iloc[0]
+            f = fin_idx.loc[key] if key in fin_idx.index else None
+            if isinstance(f, pd.DataFrame):
+                f = f.iloc[0]
+            if f is None:
+                return {"preseason_ecr": int(e["ecr"]), "preseason_pos_rank": int(e["pos_ecr"]),
+                        "actual_finish_overall": None, "verdict": f"no {season} result"}
+            delta = int(e["ecr"]) - int(f["finish_overall"])
+            if delta >= 30:
+                verdict = f"STEAL ({delta:+d} spots)"
+            elif delta >= 5:
+                verdict = f"good value ({delta:+d})"
+            elif delta > -15:
+                verdict = f"fair, at cost ({delta:+d})"
+            elif delta > -40:
+                verdict = f"underperformed ({delta:+d})"
+            else:
+                verdict = f"BUST ({delta:+d})"
+            return {
+                "preseason_ecr": int(e["ecr"]), "preseason_pos_rank": int(e["pos_ecr"]),
+                "actual_finish_overall": int(f["finish_overall"]),
+                "actual_finish_pos_rank": int(f["finish_pos_rank"]), "verdict": verdict,
+            }
+        return None
+
+    def team_ctx(name: str | None) -> dict | None:
+        """O-line, pace and schedule for this player's team that season -- the
+        same leak-free numbers team_context reports live, pulled from this
+        backtest's own board instead of today's data, since team_context itself
+        always reads the current season."""
+        if name is None:
+            return None
+        row = board[board["name"] == name]
+        if row.empty:
+            return None
+        r = row.iloc[0]
+        sos_col = f"sos_{r.get('position')}_z"
+        return {
+            "team": r.get("team"),
+            "oline_run_block_rank": (int(r["run_block_rank"])
+                                     if pd.notna(r.get("run_block_rank")) else None),
+            "oline_pass_block_rank": (int(r["pass_block_rank"])
+                                      if pd.notna(r.get("pass_block_rank")) else None),
+            "plays_per_game": (round(float(r["plays_per_game"]), 1)
+                               if pd.notna(r.get("plays_per_game")) else None),
+            "pass_rate": round(float(r["pass_rate"]), 3) if pd.notna(r.get("pass_rate")) else None,
+            "schedule_z": (round(float(r[sos_col]), 2)
+                           if sos_col in r.index and pd.notna(r.get(sos_col)) else None),
+        }
+
     picks = bd.sync_espn(league_id, season=season)
     my_overalls = set(league.picks_for_slot(league.draft_slot)[:league.rounds])
 
@@ -536,6 +611,9 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
                 my_taken_pos[optimal["position"]] = my_taken_pos.get(optimal["position"], 0) + 1
                 optimal_taken_keys.add(optimal["_key"])
 
+            algo_name = algo_top["name"] if algo_top is not None else None
+            optimal_name = optimal["name"] if optimal is not None else None
+
             yp = actual_points(p["name"])
             ap = float(algo_top["actual_points"]) if algo_top is not None and pd.notna(algo_top["actual_points"]) else None
             op = float(optimal["actual_points"]) if optimal is not None and pd.notna(optimal["actual_points"]) else None
@@ -550,12 +628,14 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
             rows.append({
                 "round": (overall - 1) // league.teams + 1, "overall": overall,
                 "your_pick": p["name"], "your_points": round(yp, 1) if yp is not None else None,
-                "algo_pick": (algo_top["name"] if algo_top is not None else None),
-                "algo_points": round(ap, 1) if ap is not None else None,
-                "optimal_pick": (optimal["name"] if optimal is not None else None),
-                "optimal_points": round(op, 1) if op is not None else None,
+                "your_pick_value": value_info(p["name"]), "your_pick_team_context": team_ctx(p["name"]),
+                "algo_pick": algo_name, "algo_points": round(ap, 1) if ap is not None else None,
+                "algo_pick_value": value_info(algo_name), "algo_pick_team_context": team_ctx(algo_name),
+                "optimal_pick": optimal_name, "optimal_points": round(op, 1) if op is not None else None,
                 "optimal_vor": (round(float(optimal["actual_vor"]), 1)
                                if optimal is not None and pd.notna(optimal["actual_vor"]) else None),
+                "optimal_pick_value": value_info(optimal_name),
+                "optimal_pick_team_context": team_ctx(optimal_name),
             })
 
         row = board[board["name"] == p["name"]]
@@ -570,7 +650,12 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
         "note": "K/DST aren't modelled -- those rounds show your actual pick only. "
                 "algo_pick is what who_should_i_pick would say live; optimal_pick is "
                 "the true hindsight-best value-over-replacement pick, QB capped at 1 "
-                "since a second quarterback can't start.",
+                "since a second quarterback can't start. *_value compares preseason "
+                "draft cost (ECR) to actual finish -- a market verdict, distinct from "
+                "actual_vor which measures against positional replacement, not cost. "
+                "*_team_context is that player's team's O-line/pace/schedule for the "
+                "season being tested (leak-free, not today's), the same numbers "
+                "team_context reports live for the current season.",
         "totals": {
             "your_points": round(your_total, 1),
             "algo_points": round(algo_total, 1),
