@@ -18,6 +18,23 @@ norm_name = names.normalize
 
 _INDEX_CACHE: dict[str, names.PlayerIndex] = {}
 
+# ESPN's proTeamId -> franchise name, from the proTeamSchedules view (stable
+# reference data, not worth a network round trip on every sync). Team defenses
+# in draft picks are encoded as -(16000 + proTeamId) rather than a real playerId.
+_ESPN_PRO_TEAMS = {
+    1: "Atlanta Falcons", 2: "Buffalo Bills", 3: "Chicago Bears",
+    4: "Cincinnati Bengals", 5: "Cleveland Browns", 6: "Dallas Cowboys",
+    7: "Denver Broncos", 8: "Detroit Lions", 9: "Green Bay Packers",
+    10: "Tennessee Titans", 11: "Indianapolis Colts", 12: "Kansas City Chiefs",
+    13: "Las Vegas Raiders", 14: "Los Angeles Rams", 15: "Miami Dolphins",
+    16: "Minnesota Vikings", 17: "New England Patriots", 18: "New Orleans Saints",
+    19: "New York Giants", 20: "New York Jets", 21: "Philadelphia Eagles",
+    22: "Arizona Cardinals", 23: "Pittsburgh Steelers", 24: "Los Angeles Chargers",
+    25: "San Francisco 49ers", 26: "Seattle Seahawks", 27: "Tampa Bay Buccaneers",
+    28: "Washington Commanders", 29: "Carolina Panthers", 30: "Jacksonville Jaguars",
+    33: "Baltimore Ravens", 34: "Houston Texans",
+}
+
 
 def _board_fingerprint(table: pd.DataFrame) -> str:
     """Cheap content signature. Keying on id() would be wrong as well as slow —
@@ -381,14 +398,88 @@ def sync_espn(league_id: str, season: int = CURRENT_SEASON,
         pid = p.get("playerId")
         if pid is None or pid == -1:
             continue
-        pid = str(pid)
+        # Team defenses aren't players -- no gsis_id, so they're never in the
+        # crosswalk. ESPN encodes them as -(16000 + proTeamId) instead.
+        if pid < 0:
+            name = f"{_ESPN_PRO_TEAMS.get(-pid - 16000, f'ESPN#{pid}')} D/ST"
+        else:
+            name = espn_map.get(str(pid), f"ESPN#{pid}")
         out.append({
             "overall": p.get("overallPickNumber"),
             "slot": None,
-            "name": espn_map.get(pid, f"ESPN#{pid}"),
+            "name": name,
             "player_id": None,
         })
     return sorted([o for o in out if o["overall"]], key=lambda o: o["overall"])
+
+
+# ESPN's lineupSlotCounts slot ids that count as a flex, and which positions each
+# is eligible for. Used to translate a real ESPN roster into LeagueSettings.starters.
+_ESPN_FLEX_SLOTS = {"3": ("RB", "WR"), "5": ("WR", "TE"), "23": ("RB", "WR", "TE"),
+                   "7": ("QB", "RB", "WR", "TE")}
+_ESPN_BASE_SLOTS = {"0": "QB", "2": "RB", "4": "WR", "6": "TE", "16": "DST", "17": "K"}
+
+
+def espn_league_context(league_id: str, season: int = CURRENT_SEASON,
+                        swid: str | None = None, espn_s2: str | None = None) -> dict:
+    """Everything needed to configure a league and find yourself in it, read
+    straight from ESPN: team count, scoring, roster starters, your draft slot.
+
+    Used by draft_backtest so a season/league_id is enough to run -- no manual
+    configure_league bookkeeping for a season you're not actively drafting.
+    """
+    swid = swid or os.environ.get("ESPN_SWID")
+    espn_s2 = espn_s2 or os.environ.get("ESPN_S2")
+    cookies = {}
+    if swid and espn_s2:
+        cookies = {"SWID": swid if swid.startswith("{") else f"{{{swid}}}",
+                   "espn_s2": espn_s2}
+    url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
+           f"/segments/0/leagues/{league_id}")
+    resp = requests.get(url, params={"view": ["mTeam", "mSettings", "mDraftDetail"]},
+                        cookies=cookies, timeout=20,
+                        headers={"User-Agent": "ffdraft-mcp/1.0"})
+    resp.raise_for_status()
+    data = resp.json()
+    settings = data.get("settings") or {}
+    teams = data.get("teams") or []
+
+    rec_item = next((i for i in settings.get("scoringSettings", {}).get("scoringItems", [])
+                     if i.get("statId") == 53), None)
+    rec_pts = float(rec_item["points"]) if rec_item else 0.0
+    scoring = "ppr" if rec_pts >= 0.9 else "half_ppr" if rec_pts >= 0.35 else "standard"
+
+    slot_counts = settings.get("rosterSettings", {}).get("lineupSlotCounts", {}) or {}
+    starters = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "K": 0, "DST": 0}
+    for sid, count in slot_counts.items():
+        if sid in _ESPN_BASE_SLOTS and count:
+            starters[_ESPN_BASE_SLOTS[sid]] += count
+        elif sid in _ESPN_FLEX_SLOTS and count:
+            starters["FLEX"] += count  # sub-eligibility isn't tracked, same as configure_league
+    roster_slots = sum(int(v) for v in slot_counts.values())
+
+    my_team = None
+    if swid:
+        target = swid.strip("{}")
+        my_team = next((t for t in teams if target in [o.strip("{}") for o in t.get("owners", [])]),
+                       None)
+    draft_slot = None
+    if my_team is not None:
+        picks = (data.get("draftDetail") or {}).get("picks") or []
+        mine = sorted([p for p in picks if p.get("teamId") == my_team["id"]],
+                      key=lambda p: p.get("overallPickNumber", 0))
+        if mine:
+            draft_slot = mine[0].get("roundPickNumber")
+
+    return {
+        "league_name": settings.get("name"),
+        "teams": len(teams),
+        "scoring": scoring,
+        "starters": starters,
+        "rounds": max(1, roster_slots),
+        "my_team_id": my_team["id"] if my_team is not None else None,
+        "draft_slot": draft_slot,
+    }
 
 
 def parse_pasted_board(text: str) -> list[str]:
