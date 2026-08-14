@@ -291,18 +291,24 @@ def _strength_of_schedule(target_season: int, defense: pd.DataFrame) -> pd.DataF
 
 # ---------------------------------------------------------------- player level
 
-def player_season_profiles(sc: Scoring, te_bonus: float = 0.0) -> pd.DataFrame:
-    """Per-player, per-season production, role and week-to-week consistency."""
-    key = "profiles_" + ",".join(f"{k}={v}" for k, v in sorted(vars(sc).items())) + f"|{te_bonus}"
+def player_season_profiles(sc: Scoring, te_bonus: float = 0.0, seasons=None) -> pd.DataFrame:
+    """Per-player, per-season production, role and week-to-week consistency.
+
+    seasons, when given, bounds this to exactly those seasons instead of every
+    season in the cache -- what build_player_table uses to build a leak-free
+    board for a past draft, so a backtest can't see the season it's predicting.
+    """
+    key = ("profiles_" + ",".join(f"{k}={v}" for k, v in sorted(vars(sc).items())) +
+           f"|{te_bonus}|{tuple(seasons) if seasons else 'all'}")
     if key in _DERIVED:
         return _DERIVED[key]
-    out = _player_season_profiles(sc, te_bonus)
+    out = _player_season_profiles(sc, te_bonus, seasons)
     _DERIVED[key] = out
     return out
 
 
-def _player_season_profiles(sc: Scoring, te_bonus: float = 0.0) -> pd.DataFrame:
-    w = sources.weekly_stats()
+def _player_season_profiles(sc: Scoring, te_bonus: float = 0.0, seasons=None) -> pd.DataFrame:
+    w = sources.weekly_stats(seasons)
     w = w[w["position"].isin(FANTASY_POSITIONS) & (w["season_type"] == "REG")].copy()
     w["fp"] = fantasy_points(w, sc, te_bonus)
 

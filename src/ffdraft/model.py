@@ -57,9 +57,20 @@ def _season_weighted(profiles: pd.DataFrame, col: str) -> pd.Series:
 
 def build_player_table(league: LeagueSettings, weights: ModelWeights,
                        season: int = CURRENT_SEASON) -> pd.DataFrame:
-    """Assemble every modelled feature into one row per player."""
+    """Assemble every modelled feature into one row per player.
+
+    Every history-derived input (production, O-line, pace, defense, separation) is
+    bounded to the five seasons strictly before `season` -- the same lookback the
+    live board uses by construction, since weekly_stats/play_by_play don't yet have
+    a season that hasn't happened. Passing a past `season` (e.g. 2025 to backtest a
+    2025 draft) makes that bound explicit: nothing from `season` or later leaks in,
+    so this is what draft_backtest uses to see only what a drafter could have known
+    on that draft day. The live depth-chart team override is skipped for a past
+    season too -- it reflects today's rosters, not that season's.
+    """
     sc = league.scoring
-    profiles = features.player_season_profiles(sc, league.te_premium_bonus)
+    lookback = list(range(season - 5, season))
+    profiles = features.player_season_profiles(sc, league.te_premium_bonus, seasons=lookback)
 
     # --- recency-weighted production and reliability
     agg = pd.concat([
@@ -103,11 +114,12 @@ def build_player_table(league: LeagueSettings, weights: ModelWeights,
     tbl["age"] = tbl["age"].fillna(26.0) + (season - profiles["season"].max())
 
     # --- team environment
-    tbl = apply_current_team(tbl, sources.depth_charts())
-    pbp = sources.play_by_play()
+    if season >= CURRENT_SEASON:
+        tbl = apply_current_team(tbl, sources.depth_charts())
+    pbp = sources.play_by_play(seasons=lookback)
     ol = features.oline_ratings(pbp)
     pace = features.team_pace_and_split(pbp)
-    dfn = features.defense_ratings(pbp, sc=sc)
+    dfn = features.defense_ratings(pbp, sources.weekly_stats(lookback), sc=sc)
     sos = features.strength_of_schedule(season, dfn)
 
     recent = int(pace["season"].max())
@@ -122,7 +134,7 @@ def build_player_table(league: LeagueSettings, weights: ModelWeights,
     # --- separation and route efficiency (pass catchers only)
     try:
         from . import separation as sep_mod
-        sep = sep_mod.separation_summary()
+        sep = sep_mod.separation_summary(seasons=lookback)
         if not sep.empty:
             tbl = tbl.merge(
                 sep[["player_id", "sep_score", "avg_separation", "avg_cushion",
@@ -139,7 +151,7 @@ def build_player_table(league: LeagueSettings, weights: ModelWeights,
     # --- rookies, projected from draft capital rather than history
     try:
         from . import rookies as rk
-        curves = rk.fit_draft_curves(sc)
+        curves = rk.fit_draft_curves(sc, seasons=list(range(season - rk.FIT_SEASONS, season)))
         rb = rk.rookie_board(season, sc, curves)
         if not rb.empty:
             rb["rookie_consistency"] = [
