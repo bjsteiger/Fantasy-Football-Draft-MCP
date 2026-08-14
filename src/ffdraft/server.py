@@ -707,8 +707,15 @@ def champion_strategies(league_id: str, seasons: str = "2020,2021,2022,2023,2024
     cross-season patterns: how often champions opened RB-RB, and the median
     round of their first QB.
 
+    biggest_steal also explains *why* it was a steal: usage_trend is that
+    player's real early- vs. late-season carries/targets/target share (a role
+    expansion actually visible in the box scores), and team_environment is his
+    team's O-line ranks, pace, and pass/rush split that season. Most value
+    picks turn out to be a volume or role story, not raw talent beating a
+    forecast -- this is what shows it concretely.
+
     ECR history only goes back to 2020 -- seasons before that get position and
-    timing data but no value verdicts. ESPN only.
+    timing data but no value verdicts or steal context. ESPN only.
     """
     yrs = [int(s) for s in seasons.split(",") if s.strip()]
     out = adp_mod.champion_strategies(league_id, yrs)

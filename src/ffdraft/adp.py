@@ -824,6 +824,76 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
     }
 
 
+def _pick_context(name: str, season: int) -> dict | None:
+    """The concrete "why" behind a value pick: how his usage changed over the
+    season (early vs. late-season carries/targets/target share -- a real role
+    expansion, not just a good month) and his team's offensive environment
+    (O-line ranks, pace, pass/rush split) for that specific season.
+
+    Unlike the leak-free construction elsewhere in this module, this is pure
+    retrospective explanation -- it uses that season's own play-by-play, not
+    data bounded before it, since the point is understanding what happened,
+    not predicting it in advance.
+    """
+    from . import features
+    from .names import normalize as norm_name
+
+    w = sources.weekly_stats([season])
+    w = w[w["season_type"] == "REG"]
+    rows = pd.DataFrame()
+    for candidate in (name, name.replace(".", "")):
+        key = norm_name(candidate)
+        rows = w[w["player_display_name"].map(norm_name) == key]
+        if not rows.empty:
+            break
+    if rows.empty:
+        return None
+    rows = rows.sort_values("week")
+    team_mode = rows["recent_team"].mode()
+    team = team_mode.iloc[0] if not team_mode.empty else None
+
+    def summarize(chunk: pd.DataFrame) -> dict | None:
+        if chunk.empty:
+            return None
+        out = {"games": int(len(chunk)), "avg_carries": round(float(chunk["carries"].mean()), 1),
+              "avg_targets": round(float(chunk["targets"].mean()), 1)}
+        if chunk["target_share"].notna().any():
+            out["avg_target_share"] = round(float(chunk["target_share"].mean()), 3)
+        # carries/targets describe a skill-position role change; a QB breakout is
+        # a passing-volume story instead, so track that too rather than showing
+        # near-zero carries/targets as if that were the whole picture.
+        if chunk["attempts"].notna().any() and chunk["attempts"].mean() > 5:
+            out["avg_pass_attempts"] = round(float(chunk["attempts"].mean()), 1)
+            out["avg_pass_yards"] = round(float(chunk["passing_yards"].mean()), 1)
+            out["avg_rush_yards"] = round(float(chunk["rushing_yards"].mean()), 1)
+        return out
+
+    usage_trend = {"weeks_1_9": summarize(rows[rows["week"] <= 9]),
+                   "weeks_10_plus": summarize(rows[rows["week"] > 9])}
+
+    team_environment = {"team": team}
+    if team:
+        try:
+            pbp = sources.play_by_play([season])
+            ol = features.oline_ratings(pbp)
+            pace = features.team_pace_and_split(pbp)
+            ol_row = ol[(ol["team"] == team) & (ol["season"] == season)]
+            pace_row = pace[(pace["team"] == team) & (pace["season"] == season)]
+            if not ol_row.empty:
+                r = ol_row.iloc[0]
+                team_environment["run_block_rank"] = int(r["run_block_rank"])
+                team_environment["pass_block_rank"] = int(r["pass_block_rank"])
+            if not pace_row.empty:
+                r = pace_row.iloc[0]
+                team_environment["plays_per_game"] = round(float(r["plays_per_game"]), 1)
+                team_environment["pass_rate"] = round(float(r["pass_rate"]), 3)
+                team_environment["rush_rate"] = round(float(r["rush_rate"]), 3)
+        except Exception as exc:
+            team_environment["note"] = f"play-by-play unavailable for {season} ({type(exc).__name__})"
+
+    return {"team": team, "usage_trend": usage_trend, "team_environment": team_environment}
+
+
 def champion_strategies(league_id: str, seasons: list[int]) -> dict:
     """What actually won this ESPN league, season by season: each champion's
     real draft, and which specific pick was the difference-maker.
@@ -836,8 +906,16 @@ def champion_strategies(league_id: str, seasons: list[int]) -> dict:
     first QB/TE round, RB/WR volume, and biggest steal, plus cross-season
     aggregates (how often champions opened RB-RB, the median first-QB round).
 
+    biggest_steal also carries a context block explaining *why* it was a
+    steal, not just that it was: usage_trend is that player's real early- vs.
+    late-season carries/targets/target share (a role expansion actually
+    visible in the box scores, not assumed), and team_environment is his
+    team's O-line ranks, pace, and pass/rush split that season. Most
+    value picks turn out to be a volume or role story, not raw talent
+    outperforming a forecast -- this is what shows that concretely.
+
     ECR history only goes back to 2020 -- earlier seasons get position/timing
-    data but no value verdicts. ESPN only.
+    data but no value verdicts or steal context. ESPN only.
     """
     import os
     import requests
@@ -924,6 +1002,8 @@ def champion_strategies(league_id: str, seasons: list[int]) -> dict:
         wr_ct = sum(1 for p in picks if p["position"] == "WR")
         steal = max((p for p in picks if p["value_delta"] is not None),
                    key=lambda p: p["value_delta"], default=None)
+        if steal is not None:
+            steal = dict(steal, context=_pick_context(steal["name"], season))
 
         champ_name = f"{champ.get('location', '')} {champ.get('nickname', '')}".strip() or champ.get("name")
         out_seasons.append({

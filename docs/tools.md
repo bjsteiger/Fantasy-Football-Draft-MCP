@@ -173,6 +173,14 @@ steal, plus cross-season patterns: how often champions opened RB-RB, and the
 median round of their first QB. ECR history only goes back to 2020 — earlier
 seasons get position/timing data but no value verdicts. ESPN only.
 
+`biggest_steal` also explains *why* it was a steal, not just that it was:
+`usage_trend` is that player's real early- vs. late-season carries/targets/
+target share (or pass attempts/yards for a QB) — an actual role or volume
+change visible in the box scores, not assumed — and `team_environment` is his
+team's O-line ranks, pace, and pass/rush split that season. Most value picks
+turn out to be a volume or situation story, not raw talent beating a forecast;
+this is what shows it concretely instead of leaving it to speculation.
+
 ### `resolve_names`
 Check how names resolve before trusting a paste sync. Reports match type per name.
 
