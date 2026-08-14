@@ -136,6 +136,25 @@ to seasons strictly before the one being predicted, same as `matchup_backtest`.
 K/DST aren't modelled anywhere in this tool, so those rounds report your actual
 pick only. ESPN only, for now.
 
+### `mock_draft`
+Monte Carlo mock draft: the live algorithm against many simulated opponents,
+averaged. Unlike `draft_backtest`, no real draft is needed or used — the other
+teams are bots that pick by that season's real preseason ADP with realistic
+reach/fall noise (bigger swings plausible late, tight consensus at the top)
+rather than following it exactly, so who's actually on the board at your turn
+varies draw to draw. Your slot (from your *active* configured league — run
+`configure_league` first) runs the same `recommend()` logic `who_should_i_pick`
+uses live, and everything is scored on real points from `season` against the
+same leak-free board `draft_backtest` builds.
+
+One draw can make the algorithm look better or worse than its true average just
+from bot luck, which is why this runs `n_trials` (default 30) and reports the
+mean/median/range, not a single result. For each round it also reports the most
+common picks and how often each showed up — rounds with no real consensus
+(usually round 6+) should be read as "plausible outcomes," not "the pick." K/DST
+aren't modelled, so only skill-position rounds run (your league's total rounds
+minus its K and DST starting slots).
+
 ### `resolve_names`
 Check how names resolve before trusting a paste sync. Reports match type per name.
 

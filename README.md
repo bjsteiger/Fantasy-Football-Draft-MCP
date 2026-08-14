@@ -142,6 +142,7 @@ hundredths, ordering correct.
 | `draft_value_history` | Backtest: preseason rank vs actual finish, by round and position |
 | `matchup_backtest` | Backtest: does schedule-adjusted matchup score beat talent alone at predicting finish? |
 | `draft_backtest` | Replay a real past ESPN draft: algorithm's pick vs. true optimal vs. what you actually took, round by round |
+| `mock_draft` | Monte Carlo mock draft: the algorithm vs. many simulated ADP-bot opponents, averaged over N trials |
 | `persistent_value_players` | Players who beat their draft cost year after year |
 | `player_report` | Every modelled factor for one player |
 | `compare_players` | Head to head, up to four |

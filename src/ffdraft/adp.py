@@ -578,3 +578,162 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
         },
         "rounds": rows,
     }
+
+
+_MOCK_BOT_CAPS = {"QB": 3, "RB": 6, "WR": 7, "TE": 3}  # loose -- realism comes from
+                                                        # ADP + noise, this just stops
+                                                        # a degenerate all-one-position bot
+
+
+def mock_draft(league, weights, season: int, n_trials: int = 30,
+               top_n: int = 5, seed: int = 0) -> dict:
+    """Monte Carlo mock draft: the live algorithm at your slot against n_trials
+    independent drafts of ADP-driven bots, scored on real points from `season`.
+
+    Unlike draft_backtest, this doesn't need (or use) a real draft -- the other
+    teams are bots that pick by that season's real preseason ADP with realistic
+    reach/fall noise (bigger swings plausible late, tight consensus at the very
+    top) rather than following it exactly, so who's actually on the board at
+    your turn varies draw to draw. Your slot runs the same model.recommend()
+    who_should_i_pick uses live. The board is leak-free, same bound as
+    draft_backtest: nothing from `season` or later feeds the projections.
+
+    A single trial can make the algorithm look better or worse than its true
+    average just from bot luck -- that's the reason for averaging many. Returns
+    the mean/median/std/range of total points across trials, plus per round the
+    most-common picks and how often each one showed up, so low-consistency
+    rounds (usually round 6+) are visible rather than hidden behind one draw.
+
+    K/DST aren't modelled, so only the league's skill-position rounds are
+    simulated (total rounds minus K and DST starting slots).
+    """
+    from . import board as bd
+    from . import model
+
+    sc_label = "ppr" if float(league.scoring.rec) >= 0.9 else \
+               "half_ppr" if float(league.scoring.rec) >= 0.35 else "standard"
+
+    tbl = model.build_player_table(league, weights, season=season)
+    proj = model.project(tbl, league, weights)
+    adp = bd.load_adp(season=season, superflex=bool(getattr(league, "superflex", 0)))
+    proj = bd.attach_adp(proj, adp)
+    board = bd.convert_adp_format(proj, sc_label)
+    board["drafted"] = False
+
+    fin = season_finish(season, league.scoring).set_index("_key")
+
+    def actual_points(name: str) -> float:
+        from .names import normalize as norm_name
+        for candidate in (name, name.replace(".", "")):
+            key = norm_name(candidate)
+            if key in fin.index:
+                r = fin.loc[key]
+                if isinstance(r, pd.DataFrame):
+                    r = r.iloc[0]
+                return float(r["points"])
+        return 0.0
+
+    teams = league.teams
+    my_slot = league.draft_slot
+    sim_rounds = max(1, league.rounds - league.starters.get("K", 0)
+                     - league.starters.get("DST", 0))
+    total_picks = sim_rounds * teams
+
+    def slot_for_pick(overall: int) -> int:
+        rnd = (overall - 1) // teams + 1
+        idx = (overall - 1) % teams + 1
+        return (teams - idx + 1) if (league.snake and rnd % 2 == 0) else idx
+
+    trial_totals = []
+    round_picks: dict[int, list[tuple[str, float]]] = {r: [] for r in range(1, sim_rounds + 1)}
+
+    for trial in range(n_trials):
+        rng = np.random.default_rng(seed + trial)
+        state = bd.DraftState(league, name=f"_mockdraft_scratch_{id(league)}")
+        state.reset()
+        rosters: dict[int, dict[str, int]] = {s: {} for s in range(1, teams + 1)}
+        my_picks_this_trial = []
+
+        for overall in range(1, total_picks + 1):
+            slot = slot_for_pick(overall)
+            b = board.copy()
+            b.loc[b["_key"].isin(state.taken_keys()), "drafted"] = True
+            pool = b[~b["drafted"]]
+            if pool.empty:
+                break
+
+            if slot == my_slot:
+                roster = state.my_roster(b)
+                nxt = state.next_pick_for_me()
+                on_clock = state.on_the_clock
+                current = nxt if (nxt is not None and nxt > on_clock) else on_clock
+                after = state.pick_after_next() if nxt == current else nxt
+                recs = model.recommend(pool, league, current_pick=current, next_pick=after,
+                                       roster=roster, top_n=top_n)
+                if recs.empty:
+                    break
+                chosen = recs.iloc[0]["name"]
+                rnd = (overall - 1) // teams + 1
+                my_picks_this_trial.append((rnd, chosen))
+            else:
+                r = rosters[slot]
+                avail = pool[pool["position"].map(
+                    lambda p: r.get(p, 0) < _MOCK_BOT_CAPS.get(p, 99))]
+                if avail.empty:
+                    avail = pool
+                sigma = np.maximum(3.0, 0.25 * avail["adp"].to_numpy())
+                noisy = avail["adp"].to_numpy() + rng.normal(0, sigma)
+                best = avail.iloc[int(np.argmin(noisy))]
+                chosen = best["name"]
+                rosters[slot][best["position"]] = rosters[slot].get(best["position"], 0) + 1
+
+            state.record(chosen, overall)
+
+        state.path.unlink(missing_ok=True)
+
+        trial_total = 0.0
+        for rnd, name in my_picks_this_trial:
+            pts = actual_points(name)
+            trial_total += pts
+            round_picks[rnd].append((name, pts))
+        trial_totals.append(trial_total)
+
+    totals = np.array(trial_totals) if trial_totals else np.array([0.0])
+
+    rounds_out = []
+    for rnd in range(1, sim_rounds + 1):
+        picks = round_picks[rnd]
+        if not picks:
+            continue
+        by_name: dict[str, list[float]] = {}
+        for name, pts in picks:
+            by_name.setdefault(name, []).append(pts)
+        ranked = sorted(by_name.items(), key=lambda kv: -len(kv[1]))
+        rounds_out.append({
+            "round": rnd,
+            "trials_reaching_round": len(picks),
+            "avg_points": round(float(np.mean([p[1] for p in picks])), 1),
+            "picks": [
+                {"player": name, "trials": len(pts_list),
+                 "frequency": round(len(pts_list) / len(picks), 2),
+                 "avg_points": round(float(np.mean(pts_list)), 1)}
+                for name, pts_list in ranked[:5]
+            ],
+        })
+
+    return {
+        "season": season, "n_trials": n_trials, "your_draft_slot": my_slot,
+        "simulated_rounds": sim_rounds,
+        "note": "Other teams are ADP bots with reach/fall noise, not real opponents "
+                "-- this is a stress test of the algorithm's typical behavior, not a "
+                "replay of any specific draft. K/DST aren't modelled, so only "
+                "skill-position rounds are simulated.",
+        "totals": {
+            "mean_points": round(float(totals.mean()), 1),
+            "median_points": round(float(np.median(totals)), 1),
+            "std_dev": round(float(totals.std()), 1),
+            "min_points": round(float(totals.min()), 1),
+            "max_points": round(float(totals.max()), 1),
+        },
+        "rounds": rounds_out,
+    }

@@ -659,6 +659,35 @@ def draft_backtest(league_id: str, season: int, top_n: int = 3) -> str:
 
 
 @mcp.tool()
+def mock_draft(season: int, n_trials: int = 30, top_n: int = 5) -> str:
+    """Monte Carlo mock draft: the live algorithm against many simulated
+    opponents, averaged, using your active league's settings.
+
+    No real draft needed -- the other teams are bots that pick by that season's
+    real preseason ADP with realistic reach/fall noise (bigger swings plausible
+    late, tight consensus at the top) rather than following it exactly, so
+    who's actually on the board at your turn varies draw to draw. Your slot
+    (from your active league's draft_slot) runs the exact same recommend()
+    logic who_should_i_pick uses live. Everything is scored on real points from
+    `season`, and the board is leak-free -- only data from strictly before
+    `season` feeds the projections, same discipline draft_backtest uses.
+
+    One draw can make the algorithm look better or worse than its true average
+    just from bot luck, which is why this runs n_trials and reports the mean,
+    not a single result. For each round it also reports the most common picks
+    and how often each showed up -- rounds with no real consensus (usually
+    round 6+, once enough upstream bot randomness has compounded) should be
+    read as "plausible outcomes," not "the pick."
+
+    K/DST aren't modelled, so only skill-position rounds are simulated
+    (your league's total rounds minus its K and DST starting slots).
+    """
+    league, weights = _settings()
+    out = adp_mod.mock_draft(league, weights, season, n_trials=n_trials, top_n=top_n)
+    return json.dumps(out, indent=2, default=str)
+
+
+@mcp.tool()
 def persistent_value_players(seasons: str = "2021,2022,2023,2024",
                              min_seasons: int = 3, limit: int = 20) -> str:
     """Players who beat their draft cost repeatedly, not once.

@@ -125,6 +125,23 @@ Who are the rookies worth taking?
 What does my roster look like?
 ```
 
+## Validating the algorithm against real seasons
+
+Two ways to stress-test the recommendation engine before trusting it on draft day,
+both leak-free (they only ever see data from before the season they're scoring):
+
+```
+Backtest my 2024 draft, league 987654321 on ESPN.
+Run a mock draft for 2025 with 40 trials.
+```
+
+`draft_backtest` replays one of your real past ESPN drafts round by round — what
+the algorithm would have recommended, the true hindsight-best pick, and what you
+actually took, all scored on that season's real points. `mock_draft` doesn't need
+a real draft at all: it runs your *active* league's settings against many
+simulated ADP-driven opponents and averages the result, since a single mock draft
+can make the algorithm look better or worse than its true average just from luck.
+
 ## If something looks wrong
 
 Check the name resolved to who you meant:
