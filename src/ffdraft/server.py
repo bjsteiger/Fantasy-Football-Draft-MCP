@@ -694,6 +694,28 @@ def mock_draft(season: int, n_trials: int = 30, top_n: int = 5) -> str:
 
 
 @mcp.tool()
+def champion_strategies(league_id: str, seasons: str = "2020,2021,2022,2023,2024,2025") -> str:
+    """What actually won your ESPN league, season by season, and which specific
+    pick made the difference.
+
+    For each season, finds whichever team finished 1st and pulls their real
+    draft. Every pick gets a value verdict -- preseason ECR against actual
+    finish, the same steal/bust framing value_picks and draft_backtest use --
+    so this answers "what draft-cost bet actually paid off for the winner,"
+    not just "what did the champion draft." Reports each champion's opening two
+    picks, first QB/TE round, RB/WR volume, and biggest steal, plus
+    cross-season patterns: how often champions opened RB-RB, and the median
+    round of their first QB.
+
+    ECR history only goes back to 2020 -- seasons before that get position and
+    timing data but no value verdicts. ESPN only.
+    """
+    yrs = [int(s) for s in seasons.split(",") if s.strip()]
+    out = adp_mod.champion_strategies(league_id, yrs)
+    return json.dumps(out, indent=2, default=str)
+
+
+@mcp.tool()
 def persistent_value_players(seasons: str = "2021,2022,2023,2024",
                              min_seasons: int = 3, limit: int = 20) -> str:
     """Players who beat their draft cost repeatedly, not once.

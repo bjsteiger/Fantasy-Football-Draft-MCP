@@ -142,6 +142,18 @@ a real draft at all: it runs your *active* league's settings against many
 simulated ADP-driven opponents and averages the result, since a single mock draft
 can make the algorithm look better or worse than its true average just from luck.
 
+## Learning from your league's history
+
+```
+What strategies have won my league? League 987654321 on ESPN.
+```
+
+`champion_strategies` pulls whoever actually finished 1st each season and their
+real draft, scoring every pick with the same value-verdict logic as
+`draft_backtest` — so you see which specific pick made a champion a champion,
+not just their roster. Also reports cross-season patterns like how often
+winners opened RB-RB and the typical round they took their first QB.
+
 ## If something looks wrong
 
 Check the name resolved to who you meant:

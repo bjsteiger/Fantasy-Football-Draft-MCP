@@ -162,6 +162,17 @@ common picks and how often each showed up — rounds with no real consensus
 aren't modelled, so only skill-position rounds run (your league's total rounds
 minus its K and DST starting slots).
 
+### `champion_strategies`
+What actually won your ESPN league, season by season, and which specific pick
+made the difference — not just what the champion drafted, but which draft-cost
+bet paid off. For each season it finds whichever team finished 1st and pulls
+their real draft, running every pick through the same preseason-ECR-vs-actual-
+finish value verdict `value_picks`/`draft_backtest` use. Reports each
+champion's opening two picks, first QB/TE round, RB/WR volume, and biggest
+steal, plus cross-season patterns: how often champions opened RB-RB, and the
+median round of their first QB. ECR history only goes back to 2020 — earlier
+seasons get position/timing data but no value verdicts. ESPN only.
+
 ### `resolve_names`
 Check how names resolve before trusting a paste sync. Reports match type per name.
 

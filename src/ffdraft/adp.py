@@ -822,3 +822,144 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
         },
         "rounds": rounds_out,
     }
+
+
+def champion_strategies(league_id: str, seasons: list[int]) -> dict:
+    """What actually won this ESPN league, season by season: each champion's
+    real draft, and which specific pick was the difference-maker.
+
+    For each season, finds the team that finished 1st (ESPN's rankCalculatedFinal)
+    and pulls their real draft. Every pick gets a value verdict -- preseason ECR
+    against actual finish, the same steal/bust framing draft_backtest uses --
+    so "what did the champion draft" becomes "what draft-cost bet actually paid
+    off," not just a list of names. Reports each season's opening two picks,
+    first QB/TE round, RB/WR volume, and biggest steal, plus cross-season
+    aggregates (how often champions opened RB-RB, the median first-QB round).
+
+    ECR history only goes back to 2020 -- earlier seasons get position/timing
+    data but no value verdicts. ESPN only.
+    """
+    import os
+    import requests
+    from . import board as bd
+    from . import sources
+    from .board import norm_name
+
+    r = sources.weekly_rosters()
+    pos_map = (r.dropna(subset=["full_name", "position"])
+                .assign(_key=lambda d: d["full_name"].map(norm_name))
+                .drop_duplicates("_key").set_index("_key")["position"].to_dict())
+
+    def resolve_position(name: str) -> str:
+        if "D/ST" in name:
+            return "DST"
+        return pos_map.get(norm_name(name), "UNK")
+
+    swid = os.environ.get("ESPN_SWID")
+    espn_s2 = os.environ.get("ESPN_S2")
+    cookies = {}
+    if swid and espn_s2:
+        cookies = {"SWID": swid if swid.startswith("{") else f"{{{swid}}}", "espn_s2": espn_s2}
+
+    out_seasons = []
+    for season in seasons:
+        url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
+              f"/segments/0/leagues/{league_id}")
+        resp = requests.get(url, params={"view": ["mTeam", "mDraftDetail"]},
+                           cookies=cookies, timeout=20,
+                           headers={"User-Agent": "ffdraft-mcp/1.0"})
+        if resp.status_code != 200:
+            out_seasons.append({"season": season, "error": f"fetch failed ({resp.status_code})"})
+            continue
+        data = resp.json()
+        teams = data.get("teams") or []
+        champ = next((t for t in teams if t.get("rankCalculatedFinal") == 1), None)
+        if champ is None:
+            out_seasons.append({"season": season, "error": "no final standings yet"})
+            continue
+        n_teams = len(teams)
+
+        # sync_espn already resolves names (crosswalk + team-defense mapping) for
+        # every pick in the league; just pick out the champion's by team id from
+        # the raw draft order this same response carries.
+        resolved = {p["overall"]: p["name"] for p in bd.sync_espn(league_id, season=season)}
+        raw_picks = (data.get("draftDetail") or {}).get("picks") or []
+        champ_raw = sorted([p for p in raw_picks if p.get("teamId") == champ["id"]
+                           and p.get("playerId", -1) != -1],
+                          key=lambda p: p.get("overallPickNumber", 0))
+        picks = []
+        for p in champ_raw:
+            overall = p["overallPickNumber"]
+            name = resolved.get(overall, f"ESPN#{p.get('playerId')}")
+            picks.append({"round": (overall - 1) // n_teams + 1,
+                         "overall": overall, "name": name,
+                         "position": resolve_position(name)})
+
+        ecr_idx = preseason_ecr(season, superflex=False).set_index("_key")
+        fin_idx = season_finish(season, sc=Scoring.preset("half_ppr")).set_index("_key")
+        for p in picks:
+            e = f = None
+            for cand in (p["name"], p["name"].replace(".", "")):
+                key = norm_name(cand)
+                if key in ecr_idx.index and e is None:
+                    e = ecr_idx.loc[key]
+                    if isinstance(e, pd.DataFrame):
+                        e = e.iloc[0]
+                if key in fin_idx.index and f is None:
+                    f = fin_idx.loc[key]
+                    if isinstance(f, pd.DataFrame):
+                        f = f.iloc[0]
+            p["preseason_ecr"] = int(e["ecr"]) if e is not None else None
+            p["actual_finish"] = int(f["finish_overall"]) if f is not None else None
+            p["actual_points"] = round(float(f["points"]), 1) if f is not None else None
+            p["value_delta"] = (p["preseason_ecr"] - p["actual_finish"]
+                                if p["preseason_ecr"] is not None and p["actual_finish"] is not None
+                                else None)
+
+        r1 = picks[0] if picks else None
+        r2 = picks[1] if len(picks) > 1 else None
+        first_qb = next((p for p in picks if p["position"] == "QB"), None)
+        first_te = next((p for p in picks if p["position"] == "TE"), None)
+        rb_ct = sum(1 for p in picks if p["position"] == "RB")
+        wr_ct = sum(1 for p in picks if p["position"] == "WR")
+        steal = max((p for p in picks if p["value_delta"] is not None),
+                   key=lambda p: p["value_delta"], default=None)
+
+        champ_name = f"{champ.get('location', '')} {champ.get('nickname', '')}".strip() or champ.get("name")
+        out_seasons.append({
+            "season": season, "teams": n_teams, "champion": champ_name,
+            "champion_record": champ.get("record", {}).get("overall"),
+            "opened": {"round_1": r1, "round_2": r2},
+            "first_qb_round": first_qb["round"] if first_qb else None,
+            "first_te_round": first_te["round"] if first_te else None,
+            "rb_drafted": rb_ct, "wr_drafted": wr_ct,
+            "biggest_steal": steal,
+            "full_draft": picks,
+        })
+
+    valid = [s for s in out_seasons if "error" not in s]
+    rb_rb_open = sum(1 for s in valid
+                     if s["opened"]["round_1"] and s["opened"]["round_2"]
+                     and s["opened"]["round_1"]["position"] == "RB"
+                     and s["opened"]["round_2"]["position"] == "RB")
+    qb_rounds = [s["first_qb_round"] for s in valid if s["first_qb_round"]]
+    te_rounds = [s["first_te_round"] for s in valid if s["first_te_round"]]
+
+    return {
+        "league_id": league_id,
+        "note": "ECR history only goes back to 2020 -- earlier seasons have position/"
+                "timing data but no value_delta/biggest_steal.",
+        "cross_season_patterns": {
+            "seasons_analyzed": len(valid),
+            "opened_rb_rb": f"{rb_rb_open}/{len(valid)}",
+            "first_qb_round_median": (sorted(qb_rounds)[len(qb_rounds) // 2]
+                                      if qb_rounds else None),
+            "first_qb_round_range": ([min(qb_rounds), max(qb_rounds)] if qb_rounds else None),
+            "first_te_round_range": ([min(te_rounds), max(te_rounds)] if te_rounds else None),
+            "avg_rb_drafted": (round(sum(s["rb_drafted"] for s in valid) / len(valid), 1)
+                              if valid else None),
+            "avg_wr_drafted": (round(sum(s["wr_drafted"] for s in valid) / len(valid), 1)
+                              if valid else None),
+        },
+        "seasons": out_seasons,
+    }
