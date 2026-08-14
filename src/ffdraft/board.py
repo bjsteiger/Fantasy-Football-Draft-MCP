@@ -303,10 +303,23 @@ class DraftState:
 # ---------------------------------------------------------------- platform sync
 
 def _id_crosswalk() -> pd.DataFrame:
-    """gsis_id <-> espn_id / sleeper_id, from nflverse rosters."""
+    """gsis_id <-> espn_id / sleeper_id, from nflverse rosters.
+
+    weekly_rosters has one row per player per week, and espn_id/sleeper_id are only
+    reliably populated in some of those snapshots -- roughly a third of rows have a
+    null espn_id even for players whose ID is known in other rows. Taking the first
+    row per gsis_id (the old drop_duplicates) kept whichever snapshot happened to
+    come first, which silently dropped the real ID for about a quarter of players --
+    Bijan Robinson, Jahmyr Gibbs and De'Von Achane among them, verified against a
+    2025 ESPN draft where they came back as unmatched ESPN#<id> picks. Grouping and
+    taking the first non-null value per column, independently, uses whichever
+    snapshot actually has the ID instead of gambling on row order.
+    """
     r = sources.weekly_rosters()
     keep = [c for c in ("gsis_id", "espn_id", "sleeper_id", "full_name", "position") if c in r.columns]
-    x = r[keep].dropna(subset=["gsis_id"]).drop_duplicates("gsis_id")
+    x = r[keep].dropna(subset=["gsis_id"])
+    x = x.groupby("gsis_id", as_index=False).agg(
+        lambda s: next((v for v in s if pd.notna(v)), np.nan))
     for c in ("espn_id", "sleeper_id"):
         if c in x.columns:
             x[c] = x[c].astype("string").str.replace(r"\.0$", "", regex=True)
