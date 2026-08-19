@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 CACHE_DIR = Path(os.environ.get("FFDRAFT_CACHE", Path.home() / ".ffdraft" / "cache"))
@@ -190,14 +190,23 @@ def _read_store() -> dict:
         return _blank_store()
 
 
+def _known_fields(cls, raw: dict) -> dict:
+    """Drop keys that no longer exist on the dataclass, e.g. a field retired
+    since this entry was saved -- old leagues should still load, not crash."""
+    valid = {f.name for f in fields(cls)}
+    return {k: v for k, v in raw.items() if k in valid}
+
+
 def _deserialize(entry: dict) -> tuple[LeagueSettings, ModelWeights]:
     sc_raw = entry.get("scoring", {})
-    sc = Scoring(**sc_raw) if isinstance(sc_raw, dict) else Scoring.preset(str(sc_raw))
-    lg_kwargs = {k: v for k, v in entry.get("league", {}).items() if k != "scoring"}
+    sc = (Scoring(**_known_fields(Scoring, sc_raw)) if isinstance(sc_raw, dict)
+          else Scoring.preset(str(sc_raw)))
+    lg_kwargs = _known_fields(LeagueSettings,
+                               {k: v for k, v in entry.get("league", {}).items() if k != "scoring"})
     if "flex_eligible" in lg_kwargs:
         lg_kwargs["flex_eligible"] = tuple(lg_kwargs["flex_eligible"])
     league = LeagueSettings(scoring=sc, **lg_kwargs)
-    weights = ModelWeights(**entry.get("weights", {}))
+    weights = ModelWeights(**_known_fields(ModelWeights, entry.get("weights", {})))
     return league, weights
 
 

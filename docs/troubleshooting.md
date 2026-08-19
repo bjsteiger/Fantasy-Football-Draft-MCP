@@ -41,10 +41,20 @@ macOS + Python 3.13 specific. The editable install works by dropping a `.pth` fi
 Python 3.13 added a safety check that silently skips `.pth` files with the OS "hidden" flag
 set, and this file can end up hidden (`ls -lO` on it shows `hidden` in the flags column) —
 run `python -v -c "import ffdraft"` and look for `Skipping hidden .pth file` to confirm.
-Clearing the flag (`chflags nohidden <file>`) can work but may not stick if something keeps
-re-hiding it. The reliable fix: add `"PYTHONPATH": "/absolute/path/to/ff-draft-mcp/src"` to
-the server's `env` block in `claude_desktop_config.json` — this bypasses the `.pth`
-mechanism entirely, regardless of the flag's state.
+
+The usual cause: the repo (and its `.venv`) sits under an iCloud-synced folder — Desktop or
+Documents with macOS's "Desktop & Documents Folders" sync turned on. iCloud's file provider
+daemon tags newly written files hidden while it syncs them, including the `.pth` file the
+moment `pip install -e .` creates it, and it will keep re-hiding it, so `chflags nohidden
+<file>` only fixes it until the next sync pass.
+
+The durable fix: put the venv somewhere not synced by iCloud, e.g. `~/.venvs/ffdraft-mcp`
+instead of `<repo>/.venv`, and point `claude_desktop_config.json`'s `command` at that
+`bin/python`. If you'd rather keep the venv where it is, add
+`"PYTHONPATH": "/absolute/path/to/ff-draft-mcp/src"` to the server's `env` block in
+`claude_desktop_config.json` — this bypasses the `.pth` mechanism entirely, regardless of
+the flag's state, though it only patches the MCP server launch, not `python setup_data.py`
+or other commands run directly from an activated shell.
 
 ## Data
 

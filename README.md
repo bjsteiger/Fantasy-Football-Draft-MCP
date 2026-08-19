@@ -22,6 +22,10 @@ cd Fantasy-Football-Draft-MCP
 # Use a virtual environment (required on macOS with Homebrew Python, and
 # recommended everywhere else) -- see docs/quickstart.md if `pip`/`python`
 # aren't found or you hit "externally-managed-environment".
+#
+# If this repo lives under an iCloud-synced folder (Desktop or Documents on
+# macOS), put the venv somewhere NOT synced instead, e.g. ~/.venvs/ffdraft-mcp
+# -- see docs/troubleshooting.md for why.
 python3 -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -e .
