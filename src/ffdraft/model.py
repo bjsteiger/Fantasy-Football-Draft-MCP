@@ -561,8 +561,16 @@ def expected_best_at_next_pick(avail: pd.DataFrame) -> dict[str, float]:
 
 # How much a bench player at each position is worth relative to the one ahead of him.
 # RB and WR depth holds real value because injuries and byes force them into lineups
-# constantly. A second QB starts a handful of times a year; a third never does.
-BACKUP_DECAY = {"QB": 0.20, "TE": 0.28, "RB": 0.72, "WR": 0.70}
+# constantly. A second QB, in a non-superflex league, never starts at all outside
+# this league's own FLEX/superflex rules -- QB isn't flex-eligible like RB/WR/TE
+# are, so 0.20 wasn't steep enough: a mock_draft check (30 trials, 1-QB league)
+# had the model rostering a real backup QB (Mahomes-plus tier, not a late dart
+# throw) in 27 of 30 trials, because QB draft_score is structurally so much
+# larger than every other position's at that draft slot -- passing yards/TDs
+# outscore the field even for a QB1-caliber name nobody would actually roster
+# twice -- that even an 80% discount left him ahead of real bench RB/WR value.
+# 0.04 pushes a true backup below that bench value in the same test.
+BACKUP_DECAY = {"QB": 0.04, "TE": 0.28, "RB": 0.72, "WR": 0.70}
 # Past these counts a player cannot realistically help you, whatever his projection.
 ROSTER_CAP = {"QB": 2, "TE": 2, "RB": 6, "WR": 7}
 
