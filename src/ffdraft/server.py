@@ -674,9 +674,16 @@ def mock_draft(season: int, n_trials: int = 30, top_n: int = 5) -> str:
     late, tight consensus at the top) rather than following it exactly, so
     who's actually on the board at your turn varies draw to draw. Your slot
     (from your active league's draft_slot) runs the exact same recommend()
-    logic who_should_i_pick uses live. Everything is scored on real points from
-    `season`, and the board is leak-free -- only data from strictly before
-    `season` feeds the projections, same discipline draft_backtest uses.
+    logic who_should_i_pick uses live. The board is leak-free -- only data from
+    strictly before `season` feeds the projections, same discipline
+    draft_backtest uses -- so passing the current season runs this against the
+    real live board (this year's projections, history through last season)
+    instead of a past, already-decided one.
+
+    Scored on real points from `season` when they exist; for a season that
+    hasn't been played yet, falls back to the model's own proj_points instead
+    (check `scored_on` in the result) -- a forecast of the algorithm's typical
+    outcome, not a validated backtest.
 
     One draw can make the algorithm look better or worse than its true average
     just from bot luck, which is why this runs n_trials and reports the mean,

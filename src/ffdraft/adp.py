@@ -683,7 +683,9 @@ _MOCK_BOT_CAPS = {"QB": 3, "RB": 6, "WR": 7, "TE": 3}  # loose -- realism comes 
 def mock_draft(league, weights, season: int, n_trials: int = 30,
                top_n: int = 5, seed: int = 0) -> dict:
     """Monte Carlo mock draft: the live algorithm at your slot against n_trials
-    independent drafts of ADP-driven bots, scored on real points from `season`.
+    independent drafts of ADP-driven bots, scored on real points from `season`
+    when they exist, or the model's own proj_points when they don't yet (the
+    current/future season -- see scored_on in the result).
 
     Unlike draft_backtest, this doesn't need (or use) a real draft -- the other
     teams are bots that pick by that season's real preseason ADP with realistic
@@ -691,7 +693,10 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
     top) rather than following it exactly, so who's actually on the board at
     your turn varies draw to draw. Your slot runs the same model.recommend()
     who_should_i_pick uses live. The board is leak-free, same bound as
-    draft_backtest: nothing from `season` or later feeds the projections.
+    draft_backtest: nothing from `season` or later feeds the projections -- so
+    passing the current season runs this against the exact live board (this
+    year's projections, built from history through last season) rather than a
+    past, already-decided one.
 
     A single trial can make the algorithm look better or worse than its true
     average just from bot luck -- that's the reason for averaging many. Returns
@@ -715,10 +720,24 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
     board = bd.convert_adp_format(proj, sc_label)
     board["drafted"] = False
 
-    fin = season_finish(season, league.scoring).set_index("_key")
+    # A season that hasn't been played yet (the live/current one, most commonly)
+    # has no real box scores to score picks against -- season_finish raises rather
+    # than returning empty, since "no games played" and "scraping gap" shouldn't
+    # look the same. Fall back to the board's own proj_points in that case: still a
+    # real Monte Carlo stress test of who the algorithm lands on given bot-driven
+    # board variance, just evaluated on the model's forecast instead of hindsight.
+    from .names import normalize as norm_name
+    try:
+        fin = season_finish(season, league.scoring).set_index("_key")
+        scored_on = "actual"
+    except RuntimeError:
+        fin = None
+        scored_on = "projected"
+        proj_lookup = {norm_name(n): p for n, p in zip(board["name"], board["proj_points"])}
 
     def actual_points(name: str) -> float:
-        from .names import normalize as norm_name
+        if fin is None:
+            return float(proj_lookup.get(norm_name(name), 0.0))
         for candidate in (name, name.replace(".", "")):
             key = norm_name(candidate)
             if key in fin.index:
@@ -818,11 +837,16 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
 
     return {
         "season": season, "n_trials": n_trials, "your_draft_slot": my_slot,
-        "simulated_rounds": sim_rounds,
-        "note": "Other teams are ADP bots with reach/fall noise, not real opponents "
-                "-- this is a stress test of the algorithm's typical behavior, not a "
-                "replay of any specific draft. K/DST aren't modelled, so only "
-                "skill-position rounds are simulated.",
+        "simulated_rounds": sim_rounds, "scored_on": scored_on,
+        "note": ("Other teams are ADP bots with reach/fall noise, not real opponents "
+                 "-- this is a stress test of the algorithm's typical behavior, not a "
+                 "replay of any specific draft. K/DST aren't modelled, so only "
+                 "skill-position rounds are simulated. "
+                 + (f"{season} hasn't been played -- picks are scored on the model's "
+                    "own proj_points (leak-free through the prior season), not real "
+                    "outcomes, so this reads as a forecast, not a validated backtest."
+                    if scored_on == "projected" else
+                    f"Picks are scored on real {season} points.")),
         "totals": {
             "mean_points": round(float(totals.mean()), 1),
             "median_points": round(float(np.median(totals)), 1),
