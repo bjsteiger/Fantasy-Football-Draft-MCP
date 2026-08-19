@@ -68,10 +68,21 @@ def apply_current_team(tbl: pd.DataFrame, depth_chart: pd.DataFrame) -> pd.DataF
     rookie before training camp, or if this season's chart isn't out yet) just
     keeps his last known team -- this is a correction, not a hard requirement.
 
+    Also flags `off_roster`: True for a player absent from a *populated* depth
+    chart, meaning every team has filed one and this player is on none of them --
+    released, retired mid-cycle, or otherwise not currently rosterable, as
+    opposed to a rookie or a player whose team simply hasn't reported yet (which
+    an empty depth_chart already covers by skipping the flag entirely below). A
+    player like this can still carry a strong projection from last season's real
+    production even though he has no path to touches this season; project()
+    discounts him for it the same way it discounts a stale season.
+
     Must run before the O-line / pace / schedule merges below, which key off
     `team`: otherwise a traded player would get graded on his old team's offense.
     """
     if depth_chart is None or depth_chart.empty or "player_id" not in tbl.columns:
+        tbl = tbl.copy()
+        tbl["off_roster"] = False
         return tbl
     out = tbl.merge(
         depth_chart[["player_id", "team"]].rename(columns={"team": "_current_team"}),
@@ -79,6 +90,7 @@ def apply_current_team(tbl: pd.DataFrame, depth_chart: pd.DataFrame) -> pd.DataF
     )
     has_current = out["_current_team"].notna()
     out.loc[has_current, "team"] = out.loc[has_current, "_current_team"]
+    out["off_roster"] = ~has_current
     return out.drop(columns=["_current_team"])
 
 
@@ -226,6 +238,7 @@ def build_player_table(league: LeagueSettings, weights: ModelWeights,
         "heavy_seasons": 0.0, "recent_burden": 0.5, "seasons_played": 0,
         "games_last": 0, "age": 22.0, "startable_rate": np.nan, "fp_mean": np.nan,
         "divisional_games": 6.0, "rz_touches": 0.0, "rz_td": 0.0,
+        "off_roster": False,
     }
     for col, val in defaults.items():
         if col in tbl.columns:
@@ -283,6 +296,17 @@ def project(tbl: pd.DataFrame, league: LeagueSettings, weights: ModelWeights) ->
     # capital-scaled above, not derived from fp_mean).
     stale = (t["last_season"].max() - t["last_season"]).clip(lower=0).fillna(0)
     t["baseline_ppg"] = t["baseline_ppg"] * (0.4 ** stale)
+
+    # A player absent from every team's current depth chart produced last season's
+    # numbers for a roster he's no longer on -- cut, retired mid-cycle, or simply
+    # without a team right now. last_season alone won't catch this (he may well
+    # have played a full slate as recently as anyone else on the board), so it's a
+    # separate check from the staleness above. Same 0.4x the model already uses for
+    # one stale season: severe enough that a genuine value signal (real ADP already
+    # crashed for the same reason) doesn't get doubled by an inflated projection on
+    # top of it, without fully zeroing a talent who could still land a role.
+    off_roster = t.get("off_roster", pd.Series(False, index=t.index)).fillna(False).astype(bool)
+    t.loc[off_roster & ~is_rook, "baseline_ppg"] *= 0.4
 
     # ---- environment multipliers, each bounded by its configured weight
     def bounded(series: pd.Series, weight: float) -> pd.Series:

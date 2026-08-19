@@ -191,6 +191,14 @@ def attach_adp(board: pd.DataFrame, adp: pd.DataFrame | None) -> pd.DataFrame:
         stale = (freshest - b["last_season"]).clip(lower=0).fillna(0)
     else:
         stale = pd.Series(0.0, index=b.index)
+    # A player off every team's depth chart has no real path to touches even
+    # though he may have played as recently as anyone else on the board (so
+    # last_season alone reads him as fresh) -- treat it as one stale season's
+    # worth of synthetic-ADP burial so a fallback estimate never hands him a
+    # top-of-board fake market price. Real ADP (the branch above) already
+    # reflects this correctly when it exists; this only guards the fallback.
+    if "off_roster" in b.columns:
+        stale = stale + b["off_roster"].fillna(False).astype(bool).astype(float)
     fallback = [synthetic_adp(p, r, s)
                for p, r, s in zip(b["position"], b["pos_rank"], stale)]
     b["adp"] = b["adp"].fillna(pd.Series(fallback, index=b.index))
