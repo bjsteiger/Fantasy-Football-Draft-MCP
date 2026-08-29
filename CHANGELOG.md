@@ -8,6 +8,95 @@ All notable changes to this project. Format follows
 
 ### Added
 
+**Individual defensive players (IDP)**
+- New `ffdraft/idp.py` and `idp_report`: scoring, projection and ranking for
+  leagues with a defensive-player roster slot. Deliberately a separate module
+  rather than four new entries in `FANTASY_POSITIONS` — that tuple serves five
+  distinct purposes across eight files, and two of them must be *prevented* from
+  gaining a defensive position. Widening it would fabricate `fpa_LB`/`sos_LB_z`
+  ("points a defence allows to opposing linebackers", a category error) and
+  multiply real QB/RB/WR/TE projections by it. See `docs/idp-research.md`.
+- Scoring is read from your own ESPN league, via a statId map **derived against
+  real player-seasons** rather than taken from a community table — ESPN
+  publishes 63 scoring items keyed by number with no names attached, and a wrong
+  mapping is silent, producing a plausible total that is simply wrong. Five
+  statIds matched every one of 38 cross-matched linebackers. Reconciliation is
+  exact: 465.5 computed against ESPN's own 465.5. `docs/idp-scoring-derivation.md`
+  records both the method and what did *not* resolve — ESPN and nflverse agree
+  on a player's total tackles and disagree on the solo/assisted split by ~10.45
+  per season, an unofficial stat neither source can settle.
+- The cost of that disagreement is measured, not waved away: reproducing ESPN's
+  IDP totals from public data gives 3.5% mean error and 0.97 rank correlation.
+  Rankings are reliable; point totals are approximate, and two players within
+  ~12 points are not meaningfully separated. The tool says so in its own output.
+- Projection is recency-weighted across seasons using the same `RECENCY_WEIGHTS`
+  the offence model uses, so a defender and a receiver are projected on
+  comparable terms — which matters because value over replacement is the only
+  figure comparable across positions, and a weekly score sums starters
+  regardless of where they line up. Chosen on evidence: over 536 defenders,
+  recency weighting beat last-season-only (MAE 2.54 vs 2.67) and a flat mean
+  (2.60), and ranked better (0.712 vs 0.702 and 0.695).
+- One-season projections are pulled 0.15 toward the mean of the upper half of
+  the board. One season and five are not equal evidence — 2.80 mean absolute
+  error and 0.607 rank correlation against 2.30 and 0.854. The 0.15 figure was
+  fitted on two independent folds and was the optimum in each. The anchor is
+  deliberately the upper-half mean rather than the all-player mean, which is the
+  trap the offence model already hit, where a mean dragged down by rotational
+  players cut genuine starters by a third.
+- **No age curve**, on purpose. Linebacker production is near-flat from 27
+  through 32 in this data (12.84 points per game at peak, still 11.45 at 32),
+  and what decline is visible is confounded by survivorship — only defenders
+  still playing well stay in the league. Inventing a decay constant would
+  fabricate precision the data does not support.
+- **No per-player IDP draft position**, also on purpose. FantasyPros does
+  publish IDP consensus and it is already in the cached parquet, but it sits on
+  a different scale from the overall board (the consensus IDP1 is at ECR 2.1,
+  meaning "best defender", not "second pick"), and it does not predict this
+  market anyway: against 22 real defender picks it correlated 0.30 with actual
+  pick. `idp.draft_timing` reports the envelope instead — how many defenders are
+  gone by a given pick, from a league's own drafts — because that is the part
+  that holds and it is what "can I wait?" actually depends on.
+
+### Fixed
+
+**Roster slots the model does not cover**
+- An ESPN league with a defensive-player slot lost it entirely: the slot matched
+  neither the base nor the flex branch and vanished from `starters`, while still
+  counting toward `rounds`. Unrecognised *starting* slots are now summed into an
+  `IDP` count rather than matched against a guessed table of slot ids — league
+  formats vary more than the module can enumerate, and the arithmetic only needs
+  to know how many slots the model cannot fill, not what each is called.
+- `mock_draft` subtracted kickers and defences by name and so missed IDP
+  entirely; `plan_my_draft` subtracted nothing at all and planned sixteen skill
+  players for a league with twelve skill slots, returning a roster that cannot
+  be fielded. Both now use `LeagueSettings.modellable_rounds()`, so there is one
+  place to be right instead of two places disagreeing.
+- A drafted defender was invisible in `draft_status`. `my_roster` resolves picks
+  against the offence board and silently skips what it cannot find, so the IDP
+  slot read as empty however many defenders you had taken. Adds `roster_needs`,
+  which shows required against filled per slot.
+- Asking the offence board about a defender dead-ended, and misleadingly:
+  `player_report` answered "no match for 'Fred Warner'", which says the name is
+  wrong rather than that defenders live on another board. `best_available` and
+  `separation_report` returned nothing at all. All three now name the problem
+  and point to `idp_report`.
+- `draft_backtest` returned unscoreable rounds with no points and no
+  explanation, which reads as a player who scored nothing all season rather than
+  a position the tool does not cover. Rows now carry
+  `your_pick_unmodelled_position`, and the note names all three kinds.
+- The IDP board ranked players who had stopped playing. C.J. Mosley came out
+  first on a 2026 board despite last appearing in 2024 for four games, three
+  strong seasons outweighing his absence. Players absent from the most recent
+  season are now excluded.
+- Two pre-existing `ruff` failures in `adp.py` (`B023`, `I001`). CI installs
+  `ruff` unpinned, so these failed on a clean checkout and made a red build
+  uninformative.
+- CI never ran on pushes to the default branch: the workflow triggered on
+  `main` while this repository's default is `master`. Pull requests were always
+  checked, so nothing merged unverified, but post-merge verification was silently
+  dead — which matters more now that pull requests can merge unattended.
+
+
 **Team drive efficiency and red zone identity**
 - New `features.team_drive_efficiency` (share of a team's drives ending in a
   touchdown/field goal/punt) and `features.redzone_identity_shift` (a team's neutral

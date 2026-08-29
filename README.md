@@ -110,6 +110,15 @@ raw ceiling. Tune it with one number.
 **Handles your actual leagues.** PPR, half PPR, standard, superflex, TE premium, any
 size, any slot. Multiple leagues side by side with separate boards and drafts.
 
+**Individual defensive players**, for leagues that start one. Scoring is read from your
+own league rather than assumed — tackles alone range from 0.5 to 2 points between
+leagues, and a guessed scoring system produces a confident, wrong ranking. Defenders are
+ranked on their own board (`idp_report`), because none of the offence model's inputs —
+target share, route separation, offensive line — mean anything for a linebacker. Read the
+order rather than the totals: rankings hold up at 0.97 rank correlation against ESPN's own
+figures, while the totals carry about 3.5% error, and two players within a dozen points
+are not meaningfully apart.
+
 **Separation and route efficiency** from NGS tracking data — the open-data stand-in for
 paywalled charting. Validated against a published PFF table: TPRR within a few
 hundredths, ordering correct.
@@ -154,7 +163,8 @@ hundredths, ordering correct.
 | `compare_players` | Head to head, up to four |
 | `team_context` | O-line ranks, pace, run/pass split, schedule for an NFL team |
 | `defense_report` | Fantasy points allowed by position, 5-year view |
-| `plan_my_draft` | Simulate all 16 of your picks from your slot |
+| `idp_report` | Rank individual defensive players, for leagues with an IDP slot |
+| `plan_my_draft` | Simulate the picks your slot gets, skipping rounds the model can't fill (K, DST, IDP) |
 | `model_settings` | Retune factor weights |
 
 ---
