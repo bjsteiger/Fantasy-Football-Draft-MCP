@@ -83,6 +83,23 @@ class LeagueSettings:
     te_premium_bonus: float = 0.0  # extra points per TE reception
     superflex: int = 0             # slots where a QB may also start
 
+    def modellable_rounds(self) -> int:
+        """Rounds the model can actually make a recommendation for.
+
+        A round spent on a kicker, a defence unit or an individual defensive
+        player is a real round -- it consumes a pick -- but none of those are
+        projected here, so simulating it invents a skill-position pick the
+        drafter never gets to make. Subtracting them is what keeps a simulated
+        roster the same shape as the one the league will actually field.
+
+        Kept on LeagueSettings rather than at the call sites because the two
+        simulators disagreed: mock_draft subtracted K and DST by name and missed
+        IDP, while plan_my_draft subtracted nothing at all and planned a full
+        sixteen skill players for a league with twelve skill slots.
+        """
+        unmodellable = sum(self.starters.get(p, 0) for p in ("K", "DST", "IDP"))
+        return max(1, self.rounds - unmodellable)
+
     def picks_for_slot(self, slot: int | None = None) -> list[int]:
         """Overall pick numbers belonging to a draft slot."""
         slot = slot or self.draft_slot

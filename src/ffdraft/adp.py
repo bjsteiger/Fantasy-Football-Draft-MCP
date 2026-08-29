@@ -853,8 +853,7 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
 
     teams = league.teams
     my_slot = league.draft_slot
-    sim_rounds = max(1, league.rounds - league.starters.get("K", 0)
-                     - league.starters.get("DST", 0))
+    sim_rounds = league.modellable_rounds()
     total_picks = sim_rounds * teams
 
     def slot_for_pick(overall: int) -> int:
