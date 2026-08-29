@@ -145,6 +145,7 @@ hundredths, ordering correct.
 | `value_picks` | Where the model disagrees with the draft market |
 | `draft_value_history` | Backtest: preseason rank vs actual finish, by round and position |
 | `matchup_backtest` | Backtest: does schedule-adjusted matchup score beat talent alone at predicting finish? |
+| `redzone_shift_backtest` | Backtest: does a team's red zone identity shift beat touchdown-luck alone at predicting finish? (2022-2025: no — stays informational) |
 | `draft_backtest` | Replay a real past ESPN draft: algorithm's pick vs. true optimal vs. what you actually took, round by round, with value verdicts and team context for each |
 | `mock_draft` | Monte Carlo mock draft: the algorithm vs. many simulated ADP-bot opponents, averaged over N trials |
 | `champion_strategies` | What actually won your ESPN league each season, and which specific pick made the difference |

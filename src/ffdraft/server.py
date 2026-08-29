@@ -637,6 +637,56 @@ def matchup_backtest(seasons: str = "2021,2022,2023,2024", position: str = "WR",
 
 
 @mcp.tool()
+def redzone_shift_backtest(seasons: str = "2022,2023,2024,2025", position: str = "WR",
+                          top_n: int = 24) -> str:
+    """Backtest: does a team's red zone play-calling identity improve on the
+    touchdown-luck signal alone at predicting next season's fantasy points?
+
+    Same idea and same discipline as matchup_backtest, applied to the
+    `redzone_identity_shift` feature surfaced (informational only) through
+    `team_context`. For each season, `talent_z` is the existing touchdown-luck
+    signal `m_td_luck` already uses (a player's own prior-season red zone role vs.
+    his position's baseline, z-scored), and `matchup_z` here is that player's
+    team's red zone identity shift from that same prior season, z-scored across
+    teams -- both leakage-free, both compared to real fantasy points scored.
+
+    A positive `improvement_corr`/`improvement_precision` would mean the shift
+    adjustment earns its keep and is worth wiring into `m_td_luck`. A 2022-2025
+    run found the opposite for both WR (improvement_corr -0.006 across 300
+    player-seasons) and TE (-0.053 across 117): red zone identity shift makes the
+    prediction *worse*, not better -- the same conclusion matchup_backtest reached
+    for schedule difficulty. This is why the shift stays informational-only in
+    `team_context` rather than feeding `draft_score`. Re-run this if the underlying
+    model or feature changes; only WR/TE are supported, since a pass-rate shift has
+    no defensible sign for a running back.
+    """
+    league, _ = _settings()
+    yrs = [int(s) for s in seasons.split(",") if s.strip()]
+    hist = adp_mod.redzone_shift_backtest(yrs, position.upper(), league.scoring)
+    if hist.empty:
+        return json.dumps({"error": "no red zone shift backtest data available for those seasons"})
+    summary = adp_mod.matchup_backtest_summary(hist, top_n)
+
+    swing = hist.copy()
+    swing["swing"] = swing["matchup_z"].abs()
+    swing_cols = ["name", "season", "team", "talent_z", "matchup_z",
+                 "matchup_adjusted_score", "points", "finish_pos_rank"]
+    biggest_swings = swing.sort_values("swing", ascending=False)
+
+    return json.dumps({
+        "position": position.upper(),
+        "summary": summary,
+        "interpretation": (
+            "corr is Spearman rank correlation against actual fantasy points; "
+            "top_n_precision is, of each metric's predicted top-N players, what "
+            "share actually finished top-N that season, averaged across seasons; "
+            "matchup_z here is the team's red zone identity shift, not schedule"
+        ),
+        "biggest_shift_swings": _rows(biggest_swings, swing_cols, 15),
+    }, indent=2, default=str)
+
+
+@mcp.tool()
 def draft_backtest(league_id: str, season: int, top_n: int = 3) -> str:
     """Replay a real past ESPN draft: the algorithm's pick, the true hindsight-best
     pick, and what you actually took, round by round.

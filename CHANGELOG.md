@@ -8,6 +8,21 @@ All notable changes to this project. Format follows
 
 ### Added
 
+**Team drive efficiency and red zone identity**
+- New `features.team_drive_efficiency` (share of a team's drives ending in a
+  touchdown/field goal/punt) and `features.redzone_identity_shift` (a team's neutral
+  pass rate minus its red zone pass rate), surfaced through `team_context`.
+- Both are informational only, like `matchup_z` in `separation_report` — not folded
+  into `draft_score`. New `redzone_shift_backtest` tool tested whether blending the
+  identity shift into the touchdown-luck signal (`m_td_luck`) improves prediction of
+  next-season points; a 2022-2025 run found it makes predictions *worse* for both WR
+  (`improvement_corr` -0.006, 300 player-seasons) and TE (-0.053, 117 player-seasons),
+  so it stays informational, matching the conclusion `matchup_backtest` already
+  reached for schedule difficulty.
+- `team_drive_efficiency` needs new play-by-play columns (`drive`,
+  `fixed_drive_result`) not present in a `play_by_play` cache built before this
+  change — run `refresh_data(force_download=true)` if it comes back empty.
+
 **Touchdown luck**
 - New environment multiplier (`m_td_luck`, weight `td_luck` / `td_luck_weight` in
   `model_settings`, default 0.06): a player's red zone touch/touchdown rate, from raw

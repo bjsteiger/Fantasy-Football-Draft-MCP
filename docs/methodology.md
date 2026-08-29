@@ -204,15 +204,17 @@ multiplier would double-count the same information the docstring on `team_contex
 already warns about for `team_offense_context`.
 
 **Red zone identity shift** is a team's neutral-field pass rate minus its red zone pass
-rate. This one *could* plausibly refine confidence in whether a receiver's red zone role
-holds up -- a team that goes noticeably run-heavy inside the 20 might not keep feeding a
-receiver who racked up season-long volume everywhere else. It isn't blended into
-`m_td_luck` or `draft_score` for the same reason `matchup_z` isn't blended into
-`separation_report`'s ranking: `matchup_backtest` exists precisely because a schedule
-signal that looked reasonable on paper made WR predictions *worse* than talent alone
-when actually tested against outcomes. A team-level red zone tendency hasn't been
-backtested the same way yet, so it's shown as read-before-you-draft context, not
-promoted into the score, until it is.
+rate. This one plausibly could have refined confidence in whether a receiver's red zone
+role holds up -- a team that goes noticeably run-heavy inside the 20 might not keep
+feeding a receiver who racked up season-long volume everywhere else. `redzone_shift_backtest`
+tested exactly that, the same way `matchup_backtest` tests schedule difficulty: does
+blending the shift into the existing touchdown-luck signal (`m_td_luck`) predict next
+season's real points better than the touchdown-luck signal alone? A 2022-2025 run found
+it doesn't -- it makes the prediction *worse* for both WR (`improvement_corr` -0.006
+across 300 player-seasons) and TE (-0.053 across 117), the same conclusion
+`matchup_backtest` already reached for schedule difficulty. It stays informational in
+`team_context`, not folded into `m_td_luck` or `draft_score`. Re-run `redzone_shift_backtest`
+if the underlying feature or model changes.
 
 ## Backtest
 

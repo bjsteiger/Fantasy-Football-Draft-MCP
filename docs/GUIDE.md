@@ -386,6 +386,15 @@ season's separation score only. Reports Spearman correlation and top-N precision
 for both metrics side by side. 2021-2024 result for WR: talent alone wins, which
 is why `separation_report` ranks by `sep_score` alone.
 
+**`redzone_shift_backtest(seasons="2022,2023,2024,2025", position="WR", top_n=24)`**
+Does blending a team's red zone identity shift (from `team_context`) into the existing
+touchdown-luck signal predict next season's points better than touchdown-luck alone?
+Same leak-free discipline as `matchup_backtest`, scored by the same summary logic. A
+2022-2025 run found the shift makes predictions *worse* for both WR (`improvement_corr`
+-0.006, 300 player-seasons) and TE (-0.053, 117) — which is why `redzone_identity_shift`
+stays informational-only in `team_context` rather than feeding `m_td_luck`/`draft_score`.
+WR/TE only.
+
 **`draft_backtest(league_id, season, top_n=3)`**
 Replays one of your real past ESPN drafts round by round: what
 `who_should_i_pick`'s algorithm would have recommended given the real board at

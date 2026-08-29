@@ -256,7 +256,6 @@ def _team_drive_efficiency(pbp: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
         .rename(columns={"posteam": "team"})
     )
-    result = drives["fixed_drive_result"].astype("string")
     out = drives.groupby(["season", "team"]).agg(
         drives=("fixed_drive_result", "size"),
         tds=("fixed_drive_result", lambda s: s.astype("string").eq("Touchdown").sum()),

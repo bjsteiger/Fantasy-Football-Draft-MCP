@@ -346,6 +346,110 @@ def matchup_value_backtest(seasons: list[int], position: str = "WR",
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def redzone_shift_backtest(seasons: list[int], position: str = "WR",
+                          sc: Scoring | None = None) -> pd.DataFrame:
+    """Does a team's red zone play-calling identity improve on the touchdown-luck
+    signal alone at predicting next season's fantasy points?
+
+    Same discipline as matchup_value_backtest, and the output uses the exact same
+    column names (`talent_z`, `matchup_adjusted_score`, `points`, `season`) on
+    purpose, so it can be scored by the same matchup_backtest_summary rather than
+    duplicating that logic.
+
+    `talent_z` is the existing touchdown-luck signal the live model already uses
+    (positive = scored fewer red zone touchdowns than his role predicted -- the
+    buy-low direction `m_td_luck` regresses toward), z-scored across that position's
+    qualifying cohort, computed from strictly the season *before* the one being
+    predicted -- what a drafter actually knew in August. `matchup_adjusted_score`
+    subtracts that player's team's red zone identity shift (z-scored across teams,
+    same season) on the theory that a team going noticeably run-heavy inside the 20
+    undercuts a receiver's or tight end's apparent red zone role even when his own
+    prior-season rate looked like a buy-low.
+
+    Only meaningful for pass catchers -- red zone identity shift is a *pass rate*
+    signal with no defensible sign for a running back (more run-heavy could mean
+    more goal-line carries, not fewer), so this raises for anything else.
+    """
+    from . import features
+
+    sc = sc or Scoring()
+    position = position.upper()
+    if position not in ("WR", "TE"):
+        raise ValueError("redzone_shift_backtest only supports WR/TE -- "
+                         "red zone identity shift has no defensible sign for RB/QB")
+
+    min_touches = 8
+    starter_n = 48 if position == "WR" else 20
+    frames = []
+    for season in seasons:
+        prior = season - 1
+        try:
+            pbp_prior = sources.play_by_play(seasons=[prior])
+            rz_role = features.player_redzone_role(pbp_prior)
+            rz_role = rz_role[rz_role["season"] == prior]
+
+            w = sources.weekly_stats([prior])
+            w = w[w["position"] == position]
+            if w.empty:
+                continue
+            names = (w[["player_id", "player_display_name"]]
+                    .drop_duplicates("player_id"))
+            team_of = (w.sort_values("week").groupby("player_id")["recent_team"]
+                      .last().rename("team").reset_index())
+
+            role = rz_role.merge(names, on="player_id", how="inner").merge(
+                team_of, on="player_id", how="left")
+            role = role[role["rz_touches"] >= min_touches].copy()
+            if role.empty:
+                print(f"  ! {season}: no qualifying {position}s with "
+                     f"{min_touches}+ RZ touches in {prior}")
+                continue
+
+            # Position baseline conversion rate for that prior season, from the
+            # highest-red-zone-volume cohort -- a proxy for "starter caliber" here
+            # since this lightweight backtest doesn't recompute full fp_mean.
+            top = role.sort_values("rz_touches", ascending=False).head(starter_n)
+            touch_sum = top["rz_touches"].sum()
+            baseline_rate = float(top["rz_td"].sum() / touch_sum) if touch_sum else 0.2
+
+            role["expected_td"] = role["rz_touches"] * baseline_rate
+            role["surplus"] = role["rz_td"] - role["expected_td"]
+            sd = role["surplus"].std(ddof=0) or 1.0
+            # Sign-flipped like touchdown_luck_multiplier: underperformed (positive
+            # surplus is negative here) -> positive talent_z -> buy-low.
+            role["talent_z"] = -(role["surplus"] - role["surplus"].mean()) / sd
+
+            rz_shift = features.redzone_identity_shift(pbp_prior)
+            rz_shift = rz_shift[rz_shift["season"] == prior]
+            if rz_shift.empty:
+                shift_map = pd.DataFrame(columns=["team", "shift_z"])
+            else:
+                shift_sd = rz_shift["shift"].std(ddof=0) or 1.0
+                shift_map = rz_shift.assign(
+                    shift_z=(rz_shift["shift"] - rz_shift["shift"].mean()) / shift_sd
+                )[["team", "shift_z"]]
+
+            role = role.merge(shift_map, on="team", how="left")
+            role["shift_z"] = role["shift_z"].fillna(0.0)
+            role["matchup_adjusted_score"] = role["talent_z"] - role["shift_z"]
+
+            fin = season_finish(season, sc)
+            fin = fin[fin["position"] == position][
+                ["player_id", "points", "finish_pos_rank"]]
+            m = role.merge(fin, on="player_id", how="inner")
+            if m.empty:
+                continue
+            m["season"] = season
+            m = m.rename(columns={"player_display_name": "name",
+                                  "shift_z": "matchup_z"})
+            frames.append(m[["player_id", "name", "team", "season", "talent_z",
+                            "matchup_z", "matchup_adjusted_score", "points",
+                            "finish_pos_rank"]])
+        except Exception as exc:
+            print(f"  ! {season}: {type(exc).__name__}: {exc}")
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def matchup_backtest_summary(hist: pd.DataFrame, top_n: int = 24) -> dict:
     """Compare talent-only vs matchup-adjusted score against actual finish.
 

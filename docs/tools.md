@@ -159,6 +159,16 @@ where schedule swung the pick most. 2021-2024 result for WR: talent alone wins â
 `separation_report` ranks by `sep_score` accordingly. Re-run this if the model
 changes to see whether that still holds.
 
+### `redzone_shift_backtest`
+Backtest: does blending a team's red zone identity shift (from `team_context`) into the
+existing touchdown-luck signal predict next season's points better than touchdown-luck
+alone? Same leak-free discipline and same output shape as `matchup_backtest`, scored by
+the same summary. A 2022-2025 run found the shift makes predictions *worse* for both WR
+(`improvement_corr` -0.006, 300 player-seasons) and TE (-0.053, 117) â€” which is why
+`redzone_identity_shift` stays informational-only in `team_context` rather than feeding
+`m_td_luck`/`draft_score`. WR/TE only, since a pass-rate shift has no defensible sign for
+a running back.
+
 ### `draft_backtest`
 Replays a real past ESPN draft round by round: what `who_should_i_pick`'s algorithm
 would have recommended given the real board at that exact moment, the true
