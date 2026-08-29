@@ -887,12 +887,17 @@ def resolve_names(names_csv: str) -> str:
 
 
 @mcp.tool()
-def prewarm(verbose: bool = True) -> str:
+def prewarm(verbose: bool = True, league_id: str | None = None) -> str:
     """Build every cache before draft day so nothing computes while you're on the clock.
 
     The first query of a session pays for downloading and modelling five seasons.
     Every query after it is served from memory. Run this an hour before your draft,
     not during it.
+
+    In a league with an IDP slot, pass league_id to build the defender board too.
+    It is skipped otherwise, because ranking defenders needs your league's own
+    scoring and there is no safe default -- tackles alone range from 0.5 to 2
+    points between leagues.
     """
     import time as _time
 
@@ -908,6 +913,23 @@ def prewarm(verbose: bool = True) -> str:
         ("oline", lambda: features.oline_ratings()),
         ("pace", lambda: features.team_pace_and_split()),
     ]
+    # The defender board is a separate build and was not covered here, so the
+    # first idp_report of a live draft paid full cost -- with 90 seconds on the
+    # clock, exactly what prewarm exists to prevent.
+    league_for_idp, _ = _settings()
+    if league_id and int(league_for_idp.starters.get("IDP", 0) or 0):
+        def _idp_board():
+            from . import idp as idp_mod
+            items = bd.espn_scoring_items(league_id, CURRENT_SEASON - 1)
+            scoring = idp_mod.scoring_from_espn(items)
+            if not scoring:
+                return None
+            seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
+            return idp_mod.build_board(
+                sources.weekly_stats(seasons), scoring, seasons=seasons,
+                teams=league_for_idp.teams,
+                idp_slots=int(league_for_idp.starters.get("IDP", 1) or 1))
+        steps.append(("idp_board", _idp_board))
     for name, fn in steps:
         s = _time.time()
         try:
