@@ -17,6 +17,8 @@ Create or update a named league and make it active.
 | `scoring` | `"half_ppr"` | `ppr`, `half_ppr`, `standard`. |
 | `snake` | `true` | `false` for linear drafts. |
 | `qb` `rb` `wr` `te` `flex` | 1/2/2/1/1 | Starting slots. |
+| `idp` | 0 | Individual defensive player slots (LB/DL/DB/edge). Counted so
+round arithmetic is right; defensive players are not projected. |
 | `superflex` | 0 | Slots where a QB may also start. |
 | `te_premium_bonus` | 0.0 | Extra points per TE reception. |
 | `consistency_weight` | 0.35 | 0 = pure upside, 1 = pure floor. |
@@ -185,8 +187,11 @@ against actual finish — the `value_picks` steal/bust framing, against real
 outcomes instead of projections) and team context (that player's team's O-line
 ranks, pace, and schedule difficulty for the season being tested — the same
 numbers `team_context` reports, but leak-free for a past season instead of
-always reading today's). K/DST aren't modelled anywhere in this tool, so those
-rounds report your actual pick only, with no value or team context. ESPN only,
+always reading today's). Kickers, defence units and individual defensive players
+aren't modelled anywhere in this tool, so those rounds report your actual pick
+only, with no value or team context. They carry
+`your_pick_unmodelled_position: true` so a blank score is distinguishable from a
+player who genuinely scored nothing, and they are excluded from the totals. ESPN only,
 for now.
 
 ### `mock_draft`
@@ -204,9 +209,10 @@ One draw can make the algorithm look better or worse than its true average just
 from bot luck, which is why this runs `n_trials` (default 30) and reports the
 mean/median/range, not a single result. For each round it also reports the most
 common picks and how often each showed up — rounds with no real consensus
-(usually round 6+) should be read as "plausible outcomes," not "the pick." K/DST
-aren't modelled, so only skill-position rounds run (your league's total rounds
-minus its K and DST starting slots).
+(usually round 6+) should be read as "plausible outcomes," not "the pick."
+Kickers, defence units and individual defensive players aren't modelled, so only
+skill-position rounds run -- `LeagueSettings.modellable_rounds()`, i.e. total
+rounds minus the K, DST and IDP starting slots.
 
 ### `champion_strategies`
 What actually won your ESPN league, season by season, and which specific pick
