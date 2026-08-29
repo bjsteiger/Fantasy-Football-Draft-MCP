@@ -1049,7 +1049,12 @@ def plan_my_draft(strategy: str = "balanced") -> str:
         "balanced": {},
     }.get(strategy, {})
 
+    # Only plan the rounds the model can fill. The rounds a kicker, defence unit
+    # or defensive player will take are real picks, but nothing here projects
+    # them -- planning a skill player for those rounds hands back a roster with
+    # more starters than the league can field.
     my_picks = [p for p in state.my_picks() if p >= state.on_the_clock]
+    my_picks = my_picks[:league.modellable_rounds()]
     roster: dict[str, int] = dict(state.my_roster(b))
     taken: set[str] = set()
     plan = []

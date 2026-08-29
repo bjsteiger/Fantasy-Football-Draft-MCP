@@ -138,3 +138,41 @@ class TestUnmodelledSlotsStayContained:
         })
         need = _positional_need(lg, roster={"RB": 1, "IDP": 1})
         assert "IDP" not in need
+
+
+class TestModellableRounds:
+    """Rounds the model can actually make a recommendation for.
+
+    A draft round spent on a kicker, a defence unit or a defensive player is a
+    real round -- it consumes a pick -- but the model projects none of those, so
+    simulating it means inventing a skill-position pick the drafter will never
+    get to make.
+    """
+
+    def test_subtracts_kicker_and_defence(self):
+        lg = LeagueSettings(rounds=16)  # default starters carry K=1, DST=1
+        assert lg.modellable_rounds() == 14
+
+    def test_subtracts_idp_slots_too(self):
+        lg = LeagueSettings(rounds=16, starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "IDP": 1,
+        })
+        assert lg.modellable_rounds() == 13
+
+    def test_counts_multiple_idp_slots(self):
+        # A DL/LB/DB league gives up three rounds, not one.
+        lg = LeagueSettings(rounds=16, starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "IDP": 3,
+        })
+        assert lg.modellable_rounds() == 11
+
+    def test_league_without_kicker_or_defence_loses_no_rounds(self):
+        lg = LeagueSettings(rounds=15, starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 0, "DST": 0, "IDP": 0,
+        })
+        assert lg.modellable_rounds() == 15
+
+    def test_never_returns_less_than_one(self):
+        # A pathological config must not produce a zero or negative round count.
+        lg = LeagueSettings(rounds=2, starters={"K": 1, "DST": 1, "IDP": 5})
+        assert lg.modellable_rounds() == 1
