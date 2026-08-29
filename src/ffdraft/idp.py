@@ -392,3 +392,37 @@ def roster_needs(starters: dict, filled: dict) -> dict:
         out[slot] = {"required": need, "filled": have,
                      "still_needed": max(0, need - have)}
     return out
+
+
+def season_finish(weekly: pd.DataFrame, scoring: dict[str, float],
+                  season: int, min_games: int = 1) -> pd.DataFrame:
+    """What each defender actually scored in one season, with positional rank.
+
+    The defensive counterpart to adp.season_finish, which filters to
+    FANTASY_POSITIONS and therefore reports a linebacker as having no season at
+    all. Used to give a real verdict to a draft pick the offence board cannot
+    see -- not to feed a projection, so no minimum-games gate is applied by
+    default: a pick that busted through injury is exactly the outcome worth
+    reporting, not one to filter away.
+    """
+    if weekly is None or weekly.empty:
+        return pd.DataFrame(columns=["name", "position", "games", "points", "pos_rank"])
+    df = weekly
+    if "season_type" in df.columns:
+        df = df[df["season_type"] == "REG"]
+    if "season" in df.columns:
+        df = df[df["season"] == season]
+    col = "position_group" if "position_group" in df.columns else "position"
+    df = df[df[col].isin(DEFENSIVE_GROUPS)]
+    if df.empty:
+        return pd.DataFrame(columns=["name", "position", "games", "points", "pos_rank"])
+    df = df.copy()
+    df["_pts"] = fantasy_points(df, scoring)
+    keys = ["player_display_name"] + (["position"] if "position" in df.columns else [])
+    out = (df.groupby(keys, dropna=False)
+             .agg(games=("week", "nunique"), points=("_pts", "sum"))
+             .reset_index().rename(columns={"player_display_name": "name"}))
+    out = out[out["games"] >= max(0, int(min_games))]
+    out = out.sort_values("points", ascending=False).reset_index(drop=True)
+    out["pos_rank"] = out.index + 1
+    return out
