@@ -129,6 +129,39 @@ def _roster_needs(league: LeagueSettings, counts: dict) -> dict:
     return idp_mod.roster_needs(league.starters, counts)
 
 
+
+def _idp_pointer(*, name: str | None = None, position: str | None = None) -> dict | None:
+    """A signpost to idp_report when a caller asks the offence board about a defender.
+
+    Without this the answer is a dead end that reads as a different problem
+    entirely: asking player_report about a linebacker returns "no match for
+    'Fred Warner'", which says the name is wrong rather than that defenders live
+    on another board. best_available and separation_report just returned nothing
+    at all. Being told where to look is the whole point -- the split between the
+    two boards is an implementation detail, and a caller should not have to know
+    it exists to get an answer.
+    """
+    from . import idp as idp_mod
+    if position and str(position).upper() in idp_mod.DEFENSIVE_GROUPS:
+        return {"error": f"{str(position).upper()} is a defensive position, which "
+                         f"this board does not cover.",
+                "use_instead": "idp_report",
+                "why": "Defensive players are projected separately -- none of the "
+                       "offence model's inputs (target share, route separation, "
+                       "O-line) mean anything for a defender."}
+    if name:
+        try:
+            defenders = idp_mod.defender_names(sources.weekly_stats([CURRENT_SEASON - 1]))
+        except Exception:
+            return None
+        if name in defenders:
+            return {"error": f"{name} is a defensive player, so he is not on this board.",
+                    "use_instead": "idp_report",
+                    "why": "Defensive players are projected separately -- none of the "
+                           "offence model's inputs mean anything for a defender."}
+    return None
+
+
 # ---------------------------------------------------------------- tools
 
 @mcp.tool()
@@ -266,6 +299,9 @@ def best_available(position: str | None = None, limit: int = 15,
     sort_by: draft_score (balanced), vor (raw value), consistency (floor),
     proj_points, or value (biggest gap between ADP and model rank).
     """
+    ptr = _idp_pointer(position=position)
+    if ptr:
+        return json.dumps(ptr, indent=2)
     b = _mark_drafted(_build_board(), _state())
     avail = b[~b["drafted"]]
     if position:
@@ -465,6 +501,16 @@ def separation_report(position: str = "WR", player_name: str | None = None,
     per-play coverage charting.
     """
     from . import separation as sep_mod
+
+    ptr = _idp_pointer(position=position, name=player_name)
+    if ptr:
+        # Route rather than return an empty leaderboard. Separation is a
+        # receiving concept -- it has no meaning for a defender at all, so
+        # "nothing found" would be the wrong answer as well as an unhelpful one.
+        ptr["note"] = ("Separation measures getting open against coverage, which "
+                       "is a receiving concept. There is no defensive equivalent "
+                       "in this data.")
+        return json.dumps(ptr, indent=2)
 
     prof = sep_mod.separation_profile()
     prof = prof[prof["qualified"]]
@@ -936,7 +982,8 @@ def player_report(player_name: str) -> str:
     b = _build_board()
     r = bd.match_player(player_name, b)
     if r is None:
-        return json.dumps({"error": f"no match for '{player_name}'"})
+        ptr = _idp_pointer(name=player_name)
+        return json.dumps(ptr or {"error": f"no match for '{player_name}'"}, indent=2)
     fields = ["name", "position", "team", "age", "overall_rank", "pos_rank", "adp", "adp_delta",
               "proj_points", "adj_ppg", "baseline_ppg", "exp_games",
               "consistency", "startable_rate", "spike_rate", "floor", "ceiling", "fp_cv",
