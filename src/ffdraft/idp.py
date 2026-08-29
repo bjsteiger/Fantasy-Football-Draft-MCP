@@ -302,3 +302,38 @@ def draft_timing(defender_picks_by_season: dict[int, list[int]], teams: int,
                   "here, so which specific defender goes when is close to noise. "
                   "The useful signal is how many are gone, not which.",
     }
+
+
+def defender_names(weekly: pd.DataFrame) -> set[str]:
+    """Every player in the data whose position group is defensive.
+
+    Used to tell an IDP pick apart from a kicker or a defence unit. All three
+    are missing from the offence board, so without this a drafted linebacker is
+    indistinguishable from a drafted kicker -- and DraftState.my_roster drops
+    both silently, which is why an IDP slot could look filled when it was not.
+    """
+    if weekly is None or weekly.empty:
+        return set()
+    col = "position_group" if "position_group" in weekly.columns else "position"
+    if col not in weekly.columns or "player_display_name" not in weekly.columns:
+        return set()
+    d = weekly[weekly[col].isin(DEFENSIVE_GROUPS)]
+    return set(d["player_display_name"].dropna().unique())
+
+
+def roster_needs(starters: dict, filled: dict) -> dict:
+    """Required versus filled per starting slot, including the IDP slot.
+
+    FLEX is reported but not treated as a shortfall of any one position -- it is
+    filled by whichever eligible position ends up spare, so counting it against
+    RB or WR individually would invent a need that is not there.
+    """
+    out = {}
+    for slot, need in (starters or {}).items():
+        need = int(need or 0)
+        if need <= 0:
+            continue
+        have = int((filled or {}).get(slot, 0) or 0)
+        out[slot] = {"required": need, "filled": have,
+                     "still_needed": max(0, need - have)}
+    return out
