@@ -123,6 +123,12 @@ def _rows(df: pd.DataFrame, cols: list[str], n: int) -> list[dict]:
     return out
 
 
+
+def _roster_needs(league: LeagueSettings, counts: dict) -> dict:
+    from . import idp as idp_mod
+    return idp_mod.roster_needs(league.starters, counts)
+
+
 # ---------------------------------------------------------------- tools
 
 @mcp.tool()
@@ -394,8 +400,24 @@ def draft_status() -> str:
             "position": (r["position"] if r is not None else None),
             "proj_points": (round(float(r["proj_points"]), 1) if r is not None else None),
         })
+    counts = dict(state.my_roster(b))
+    league, _ = _settings()
+    # A defender is absent from the offence board, so my_roster silently drops
+    # him and the IDP slot looks empty when it is filled. Classify the picks it
+    # could not resolve rather than leaving the roster quietly wrong.
+    if int(league.starters.get("IDP", 0) or 0):
+        from . import idp as idp_mod
+        try:
+            defenders = idp_mod.defender_names(sources.weekly_stats([CURRENT_SEASON - 1]))
+        except Exception:
+            defenders = set()
+        resolved = set(b["_key"]) if "_key" in b.columns else set()
+        for p in mine:
+            if bd.norm_name(p["name"]) not in resolved and p["name"] in defenders:
+                counts["IDP"] = counts.get("IDP", 0) + 1
     return json.dumps({**state.summary(), "my_team": detail,
-                       "roster_counts": state.my_roster(b)}, indent=2)
+                       "roster_counts": counts,
+                       "roster_needs": _roster_needs(league, counts)}, indent=2)
 
 
 @mcp.tool()

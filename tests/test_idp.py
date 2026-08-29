@@ -204,3 +204,33 @@ class TestRecencyWeighting:
         b = idp.build_board(self._two_seasons(12, 12), {"tackles_solo": 1.0},
                             seasons=[2024, 2025])
         assert int(b.iloc[0]["seasons_used"]) == 2
+
+
+class TestRosterNeeds:
+    def test_reports_an_unfilled_idp_slot(self):
+        n = idp.roster_needs({"QB": 1, "RB": 2, "IDP": 1}, {"QB": 1, "RB": 2})
+        assert n["IDP"] == {"required": 1, "filled": 0, "still_needed": 1}
+
+    def test_a_filled_slot_shows_no_shortfall(self):
+        n = idp.roster_needs({"IDP": 1}, {"IDP": 1})
+        assert n["IDP"]["still_needed"] == 0
+
+    def test_slots_the_league_does_not_use_are_omitted(self):
+        assert "IDP" not in idp.roster_needs({"QB": 1, "IDP": 0}, {})
+
+    def test_multiple_idp_slots_are_counted(self):
+        n = idp.roster_needs({"IDP": 3}, {"IDP": 1})
+        assert n["IDP"]["still_needed"] == 2
+
+
+class TestDefenderNames:
+    def test_picks_out_defensive_position_groups(self):
+        w = pd.DataFrame([
+            _wk("Backer", 2025, 1, pos_group="LB"),
+            {"player_display_name": "Wideout", "position_group": "WR"},
+            {"player_display_name": "Lineman", "position_group": "DL"},
+        ])
+        assert idp.defender_names(w) == {"Backer", "Lineman"}
+
+    def test_empty_input_is_an_empty_set_not_a_crash(self):
+        assert idp.defender_names(pd.DataFrame()) == set()
