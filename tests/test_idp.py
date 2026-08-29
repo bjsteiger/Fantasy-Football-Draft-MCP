@@ -236,6 +236,26 @@ class TestDefenderNames:
         assert idp.defender_names(pd.DataFrame()) == set()
 
 
+class TestNoDeadEnds:
+    """Asking the offence board about a defender should point somewhere.
+
+    Before this, player_report("Fred Warner") answered "no match for 'Fred
+    Warner'" -- which says the name is wrong, not that defenders are on another
+    board. best_available and separation_report returned nothing at all.
+    """
+
+    def test_a_defensive_position_is_recognised(self):
+        from ffdraft import server
+        p = server._idp_pointer(position="LB")
+        assert p and p["use_instead"] == "idp_report"
+
+    def test_an_offensive_position_is_left_alone(self):
+        from ffdraft import server
+        assert server._idp_pointer(position="WR") is None
+
+    def test_position_check_is_case_insensitive(self):
+        from ffdraft import server
+        assert server._idp_pointer(position="lb") is not None
 class TestSingleSeasonShrink:
     """One season and five seasons are not equally knowable.
 
