@@ -90,6 +90,15 @@ def _build_board(force: bool = False) -> pd.DataFrame:
         adp = None
     proj = bd.attach_adp(proj, adp)
     proj = bd.convert_adp_format(proj, _scoring_label(league))
+    # One row per player. A player who changed teams mid-window came through
+    # twice -- Gabe Davis appeared as both BUF and JAX. Both rows shared a _key,
+    # so drafting him correctly retired both and he could not be taken twice,
+    # but he still occupied two board slots and could be listed twice. Keep the
+    # better-projected row, which is the one carrying his fuller season.
+    if "_key" in proj.columns:
+        proj = (proj.sort_values("proj_points", ascending=False)
+                    .drop_duplicates("_key", keep="first")
+                    .reset_index(drop=True))
     proj.to_parquet(path, index=False)
     _BOARDS[key] = proj
     return proj

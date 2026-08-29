@@ -176,3 +176,33 @@ class TestModellableRounds:
         # A pathological config must not produce a zero or negative round count.
         lg = LeagueSettings(rounds=2, starters={"K": 1, "DST": 1, "IDP": 5})
         assert lg.modellable_rounds() == 1
+
+
+class TestBoardCacheVersioning:
+    """A model change must invalidate cached boards.
+
+    Boards are written to disk keyed on league settings. Settings alone are not
+    enough: without a model version in the key, a board written by older code is
+    served forever, so a projection change silently does nothing until someone
+    deletes the parquet by hand.
+    """
+
+    def test_model_version_is_part_of_the_key(self):
+        import ffdraft.config as cfg
+        lg = LeagueSettings(teams=10)
+        before = lg.cache_key()
+        original = cfg.MODEL_VERSION
+        try:
+            cfg.MODEL_VERSION = original + 1
+            assert lg.cache_key() != before
+        finally:
+            cfg.MODEL_VERSION = original
+        assert lg.cache_key() == before
+
+    def test_settings_still_separate_boards(self):
+        # The version must not flatten the distinctions the key already made.
+        assert LeagueSettings(teams=10).cache_key() != LeagueSettings(teams=12).cache_key()
+        assert (LeagueSettings(superflex=0).cache_key()
+                != LeagueSettings(superflex=1).cache_key())
+        assert (LeagueSettings(scoring=Scoring.preset("ppr")).cache_key()
+                != LeagueSettings(scoring=Scoring.preset("standard")).cache_key())
