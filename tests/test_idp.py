@@ -447,3 +447,35 @@ class TestBoardConsistencyAcrossEntryPoints:
                             seasons=[2023, 2024, 2025], teams=10, idp_slots=1)
         assert list(a["name"]) == list(b["name"])
         assert list(a["vor"]) == list(b["vor"])
+
+
+class TestFlexSlotFills:
+    """FLEX is filled by spare eligible players, not by anyone playing "FLEX".
+
+    Counted like every other slot it could never fill -- no player carries that
+    position, so `filled` was always zero. A real simulated draft ended with six
+    running backs against two required and still reported an empty flex.
+    """
+
+    def test_surplus_running_backs_fill_the_flex(self):
+        n = idp.roster_needs({"RB": 2, "WR": 2, "FLEX": 1},
+                             {"RB": 6, "WR": 5})
+        assert n["FLEX"]["still_needed"] == 0
+
+    def test_flex_stays_open_with_no_surplus(self):
+        n = idp.roster_needs({"RB": 2, "WR": 2, "FLEX": 1}, {"RB": 2, "WR": 2})
+        assert n["FLEX"]["still_needed"] == 1
+
+    def test_a_position_below_its_requirement_does_not_feed_the_flex(self):
+        # One spare WR, but RB is short -- the spare fills flex, RB still needed.
+        n = idp.roster_needs({"RB": 2, "WR": 2, "FLEX": 1}, {"RB": 1, "WR": 3})
+        assert n["RB"]["still_needed"] == 1
+        assert n["FLEX"]["still_needed"] == 0
+
+    def test_two_flex_slots_need_two_spares(self):
+        n = idp.roster_needs({"RB": 2, "WR": 2, "FLEX": 2}, {"RB": 3, "WR": 2})
+        assert n["FLEX"]["still_needed"] == 1
+
+    def test_filled_is_not_reported_above_what_is_required(self):
+        n = idp.roster_needs({"RB": 2, "FLEX": 1}, {"RB": 9})
+        assert n["FLEX"]["filled"] == 1
