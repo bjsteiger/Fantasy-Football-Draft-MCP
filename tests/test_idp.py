@@ -234,3 +234,88 @@ class TestDefenderNames:
 
     def test_empty_input_is_an_empty_set_not_a_crash(self):
         assert idp.defender_names(pd.DataFrame()) == set()
+
+
+class TestSingleSeasonShrink:
+    """One season and five seasons are not equally knowable.
+
+    Measured: predicting a held-out season, one-season defenders landed at 2.80
+    MAE / 0.607 rank correlation against 2.30 / 0.854 for four-season players.
+    A 0.15 pull toward the upper-half mean improved both metrics on two
+    independent folds and was the optimum in each.
+    """
+
+    def _mixed(self):
+        rows = []
+        for wk in range(1, 18):                      # veteran, 4 seasons, steady
+            for yr in (2022, 2023, 2024, 2025):
+                rows.append(_wk("Veteran", yr, wk, solo=10))
+            rows.append(_wk("Rookie", 2025, wk, solo=20))   # one season, hot
+            rows.append(_wk("Filler", 2025, wk, solo=4))
+            for yr in (2024, 2025):
+                rows.append(_wk("Filler Two", yr, wk, solo=5))
+        return pd.DataFrame(rows)
+
+    def test_one_season_player_is_pulled_toward_the_anchor(self):
+        b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        rookie = b[b["name"] == "Rookie"].iloc[0]
+        assert float(rookie["ppg"]) < 20.0, "an unshrunk rookie would sit at 20"
+
+    def test_multi_season_players_are_untouched(self):
+        b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        vet = b[b["name"] == "Veteran"].iloc[0]
+        assert float(vet["ppg"]) == pytest.approx(10.0)
+
+    def test_shrink_is_gentle_not_a_reordering(self):
+        # The rookie is genuinely better and must stay ahead of the veteran.
+        b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        order = list(b["name"])
+        assert order.index("Rookie") < order.index("Veteran")
+
+    def test_a_board_with_no_single_season_players_is_unchanged(self):
+        rows = []
+        for wk in range(1, 18):
+            for yr in (2024, 2025):
+                rows.append(_wk("A", yr, wk, solo=10))
+                rows.append(_wk("B", yr, wk, solo=6))
+        b = idp.build_board(pd.DataFrame(rows), {"tackles_solo": 1.0},
+                            seasons=[2024, 2025])
+        assert float(b[b["name"] == "A"].iloc[0]["ppg"]) == pytest.approx(10.0)
+
+
+class TestStalePlayersExcluded:
+    """A player who has stopped playing must not rank.
+
+    A multi-season average will happily keep ranking someone who is gone: on a
+    real 2026 board built from 2021-25, C.J. Mosley came out FIRST despite last
+    appearing in 2024 for four games, his three strong seasons outweighing his
+    absence. Every test passed at the time.
+    """
+
+    def _rows(self):
+        rows = []
+        for wk in range(1, 18):
+            for yr in (2022, 2023):
+                rows.append(_wk("Retired Star", yr, wk, solo=20))   # gone after 2023
+            for yr in (2022, 2023, 2024):
+                rows.append(_wk("Still Playing", yr, wk, solo=10))
+        return pd.DataFrame(rows)
+
+    def test_player_absent_from_the_latest_season_is_dropped(self):
+        b = idp.build_board(self._rows(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024])
+        assert "Retired Star" not in set(b["name"])
+        assert "Still Playing" in set(b["name"])
+
+    def test_the_filter_can_be_turned_off_for_historical_analysis(self):
+        b = idp.build_board(self._rows(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024], require_recent_season=False)
+        assert "Retired Star" in set(b["name"])
+
+    def test_a_single_season_board_is_unaffected(self):
+        rows = pd.DataFrame([_wk("Solo", 2025, wk, solo=10) for wk in range(1, 18)])
+        assert "Solo" in set(idp.build_board(rows, {"tackles_solo": 1.0},
+                                             seasons=[2025])["name"])
