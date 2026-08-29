@@ -898,7 +898,21 @@ def compare_players(names: str) -> str:
 
 @mcp.tool()
 def team_context(team: str) -> str:
-    """Offensive environment for an NFL team: O-line, pace, run/pass split, schedule."""
+    """Offensive environment for an NFL team: O-line, pace, run/pass split, schedule,
+    drive efficiency, and red zone play-calling identity.
+
+    `drive_efficiency` and `redzone_identity` are informational context, not folded into
+    any player's projection or draft_score -- same convention as `matchup_z` in
+    separation_report. `drive_efficiency.pct_td` is the share of that team's drives
+    ending in a touchdown (a multiplier on how many scoring chances its players get,
+    already reflected in their raw points, so treat this as a confidence check on a
+    role rather than an extra adjustment). `redzone_identity.shift` is that team's
+    neutral-field pass rate minus its red zone pass rate: a large positive shift means
+    the offense gets meaningfully more run-heavy inside the 20 (receiving volume there,
+    and the touchdown equity that comes with it, is less trustworthy for that team's
+    pass catchers); near zero or negative means the passing game keeps its role even in
+    the scoring area.
+    """
     league, _ = _settings()
     # No pbp argument: that routes through the memoised builders instead of
     # recomputing a full pass over play-by-play on every call.
@@ -906,6 +920,8 @@ def team_context(team: str) -> str:
     pace = features.team_pace_and_split()
     dfn = features.defense_ratings(sc=league.scoring)
     sos = features.strength_of_schedule(CURRENT_SEASON, dfn)
+    drive_eff = features.team_drive_efficiency()
+    rz_shift = features.redzone_identity_shift()
     t = team.upper()
     recent = int(pace["season"].max())
     out = {
@@ -920,6 +936,14 @@ def team_context(team: str) -> str:
                                  "neutral_pass_rate", "off_epa"], 1),
         "schedule": _rows(sos[sos["team"] == t],
                           ["divisional_games"] + [c for c in sos.columns if c.endswith("_z")], 1),
+        "drive_efficiency": _rows(
+            drive_eff[(drive_eff.get("team") == t) & (drive_eff.get("season", pd.Series(dtype=int)) == recent)]
+            if not drive_eff.empty else drive_eff,
+            ["season", "drives", "pct_td", "pct_fg", "pct_punt"], 1),
+        "redzone_identity": _rows(
+            rz_shift[(rz_shift.get("team") == t) & (rz_shift.get("season", pd.Series(dtype=int)) == recent)]
+            if not rz_shift.empty else rz_shift,
+            ["season", "neutral_pass_rate", "rz_pass_rate", "shift"], 1),
     }
     return json.dumps(out, indent=2, default=str)
 

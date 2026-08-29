@@ -191,6 +191,29 @@ a part-time receiver posts a flattering YPRR that says nothing about a real work
 **Man/zone splits are not reproducible** from open data. That needs per-play coverage
 classification, which only manual charting provides.
 
+## Team drive efficiency and red zone identity
+
+Two team-level signals surfaced through `team_context`, informational only -- like
+`matchup_z` in `separation_report`, neither is folded into `draft_score`.
+
+**Drive efficiency** (`pct_td`/`pct_fg`/`pct_punt`) is the share of a team's drives
+ending in each outcome. It doesn't get blended into a player's projection because it's
+already baked into his raw points -- a receiver on an efficient offense already scored
+more touchdowns last season for exactly that reason. Applying it a second time as a
+multiplier would double-count the same information the docstring on `team_context`
+already warns about for `team_offense_context`.
+
+**Red zone identity shift** is a team's neutral-field pass rate minus its red zone pass
+rate. This one *could* plausibly refine confidence in whether a receiver's red zone role
+holds up -- a team that goes noticeably run-heavy inside the 20 might not keep feeding a
+receiver who racked up season-long volume everywhere else. It isn't blended into
+`m_td_luck` or `draft_score` for the same reason `matchup_z` isn't blended into
+`separation_report`'s ranking: `matchup_backtest` exists precisely because a schedule
+signal that looked reasonable on paper made WR predictions *worse* than talent alone
+when actually tested against outcomes. A team-level red zone tendency hasn't been
+backtested the same way yet, so it's shown as read-before-you-draft context, not
+promoted into the score, until it is.
+
 ## Backtest
 
 `draft_value_history` compares preseason consensus to actual finish across 913 draftable

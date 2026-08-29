@@ -120,7 +120,24 @@ Restricted to players the market actually ranks.
 
 ### `team_context`
 An NFL team's offensive environment: O-line ranks with history, pace, run/pass split,
-schedule difficulty, divisional games.
+schedule difficulty, divisional games, drive efficiency, and red zone play-calling
+identity.
+
+`drive_efficiency` (`pct_td`/`pct_fg`/`pct_punt`) is the share of that team's drives
+ending in each outcome -- a multiplier on how many scoring chances its players get,
+already reflected in their raw points, so read it as a confidence check on a role
+rather than an extra score adjustment. `redzone_identity.shift` is neutral-field pass
+rate minus red zone pass rate: a large positive shift means the offense goes notably
+run-heavy inside the 20 (that team's receivers keep season-long volume but may lose
+target share exactly where touchdowns happen); near zero or negative means the passing
+game keeps its role in the scoring area too. Both are informational, like `matchup_z`
+in `separation_report` -- not folded into `draft_score`, since blending an
+unvalidated new signal into the score is exactly the mistake `matchup_backtest` exists
+to catch.
+
+Needs the `fixed_drive_result`/`drive` play-by-play columns, added after earlier cached
+`play_by_play` parquets were built. If `drive_efficiency`/`redzone_identity` come back
+empty for a season that should have data, run `refresh_data(force_download=true)`.
 
 ### `defense_report`
 Fantasy points allowed by position, current season and five-year. Rank 1 = toughest.

@@ -27,6 +27,7 @@ PBP_COLS = [
     "rush_attempt", "pass_attempt", "penalty", "interception",
     "pass_touchdown", "rush_touchdown", "air_yards", "series",
     "yardline_100", "rusher_player_id", "receiver_player_id",
+    "drive", "fixed_drive_result",
 ]
 
 

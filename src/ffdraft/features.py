@@ -225,6 +225,91 @@ def _defense_ratings(pbp: pd.DataFrame, weekly: pd.DataFrame, sc: Scoring) -> pd
     return out
 
 
+def team_drive_efficiency(pbp: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Share of each team's offensive drives that end in a touchdown, field goal, or punt.
+
+    Where a team *starts* drives is mostly special teams and field position -- where it
+    *ends* them, and how often that's a touchdown, is the offense itself. This is the
+    context that separates "same role, different opportunity": a mid-tier receiver on a
+    team that finishes 30%+ of drives with a touchdown gets meaningfully more scoring
+    chances than the same role on a team that punts on four of every nine possessions,
+    even though that difference is invisible in a season-long target share.
+
+    Requires the `fixed_drive_result` column, added to PBP_COLS after this function was
+    written -- a play_by_play parquet cached before that change won't have it. Run
+    `refresh_data(force_download=true)` if this returns empty for a season that should
+    have data.
+    """
+    if pbp is None:
+        return _memo("drive_efficiency", lambda: _team_drive_efficiency(sources.play_by_play()))
+    return _team_drive_efficiency(pbp)
+
+
+def _team_drive_efficiency(pbp: pd.DataFrame) -> pd.DataFrame:
+    if "fixed_drive_result" not in pbp.columns:
+        return pd.DataFrame(columns=["season", "team", "drives", "pct_td", "pct_fg", "pct_punt"])
+
+    drives = (
+        pbp[pbp["posteam"].notna() & pbp["drive"].notna()]
+        .groupby(["season", "posteam", "drive"], observed=True)["fixed_drive_result"]
+        .first()
+        .reset_index()
+        .rename(columns={"posteam": "team"})
+    )
+    result = drives["fixed_drive_result"].astype("string")
+    out = drives.groupby(["season", "team"]).agg(
+        drives=("fixed_drive_result", "size"),
+        tds=("fixed_drive_result", lambda s: s.astype("string").eq("Touchdown").sum()),
+        fgs=("fixed_drive_result", lambda s: s.astype("string").eq("Field goal").sum()),
+        punts=("fixed_drive_result", lambda s: s.astype("string").eq("Punt").sum()),
+    ).reset_index()
+    out["pct_td"] = 100 * out["tds"] / out["drives"].clip(lower=1)
+    out["pct_fg"] = 100 * out["fgs"] / out["drives"].clip(lower=1)
+    out["pct_punt"] = 100 * out["punts"] / out["drives"].clip(lower=1)
+    return out.drop(columns=["tds", "fgs", "punts"])
+
+
+def redzone_identity_shift(pbp: pd.DataFrame | None = None) -> pd.DataFrame:
+    """How much a team's pass rate drops once it crosses into the red zone.
+
+    Compares red zone (yardline_100 <= 20) pass rate against that same team's pass rate
+    everywhere else on the field. A team can throw the ball at a normal rate for 80 yards
+    and still hand the ball to its running back (or a rushing QB) the moment it's inside
+    the 20 -- a receiver's season-long target share says nothing about whether he keeps
+    that role in exactly the situations where touchdowns happen. `shift` is neutral minus
+    red-zone pass rate: positive means the offense gets meaningfully more run-heavy near
+    the goal line (receiving volume there is less trustworthy), near zero or negative means
+    the passing game keeps its role even in the scoring area.
+
+    Informational, like `matchup_z` in separation_report -- not folded into any player's
+    projection. A per-team tendency isn't the same as a per-player role, and blending an
+    unvalidated new signal into draft_score is exactly the mistake matchup_backtest exists
+    to catch (it already found doing this with schedule difficulty made WR predictions
+    worse, not better). Use it as read-before-you-draft context, not a score adjustment.
+    """
+    if pbp is None:
+        return _memo("redzone_identity_shift", lambda: _redzone_identity_shift(sources.play_by_play()))
+    return _redzone_identity_shift(pbp)
+
+
+def _redzone_identity_shift(pbp: pd.DataFrame) -> pd.DataFrame:
+    off = pbp[pbp["posteam"].notna() & pbp["play_type"].isin(["pass", "run"])]
+    rz = off[off["yardline_100"].notna() & (off["yardline_100"] <= 20)]
+    neutral = off[off["yardline_100"].notna() & (off["yardline_100"] > 20)]
+
+    def _pass_rate(df: pd.DataFrame) -> pd.DataFrame:
+        g = df.groupby(["season", "posteam"], observed=True)
+        return (g["pass"].sum() / g["pass"].size().clip(lower=1)).rename("pass_rate").reset_index()
+
+    rz_rate = _pass_rate(rz).rename(columns={"pass_rate": "rz_pass_rate"})
+    neu_rate = _pass_rate(neutral).rename(columns={"pass_rate": "neutral_pass_rate"})
+    out = neu_rate.merge(rz_rate, on=["season", "posteam"], how="inner").rename(columns={"posteam": "team"})
+    out["rz_pass_rate"] *= 100
+    out["neutral_pass_rate"] *= 100
+    out["shift"] = out["neutral_pass_rate"] - out["rz_pass_rate"]
+    return out
+
+
 def player_redzone_role(pbp: pd.DataFrame | None = None) -> pd.DataFrame:
     """Red zone touches and touchdowns, per player-season, from raw plays.
 

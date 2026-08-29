@@ -69,6 +69,11 @@ so this means the season isn't published yet. Set `FFDRAFT_SEASONS` to seasons t
 **Stale data mid-season**
 `refresh_data(force_download=true)`
 
+**`team_context`'s `drive_efficiency` or `redzone_identity` comes back empty**
+Those need the `fixed_drive_result`/`drive` play-by-play columns, added to `PBP_COLS`
+after some cached `play_by_play` parquets were already built. A cache built before that
+change won't have them until it's rebuilt: `refresh_data(force_download=true)`.
+
 **Reclaiming disk space**
 Delete `~/.ffdraft/cache/`. It rebuilds on the next run.
 
