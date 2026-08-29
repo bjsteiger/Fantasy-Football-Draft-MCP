@@ -211,6 +211,51 @@ def _idp_option(league: LeagueSettings, roster: dict, current_pick: int,
         return None
 
 
+
+def _idp_plan(league: LeagueSettings, league_id: str | None) -> dict | None:
+    """Which defender to target, and roughly when.
+
+    Reported next to the plan rather than as one of its rounds. The plan is
+    built pick by pick from ADP -- who realistically falls to you at each turn --
+    and defenders have no usable draft position, so there is no honest way to
+    say which round one lands in. What the league's own history does support is
+    a window, so that is what is given.
+
+    mock_draft is deliberately left alone. Its opponents are ADP bots, and
+    without a defensive market there is nothing for them to draft against;
+    inventing bot behaviour for a position whose real timing correlated 0.30
+    with consensus would add noise and call it a simulation.
+    """
+    if not int(league.starters.get("IDP", 0) or 0):
+        return None
+    if not league_id:
+        return {"note": "This league starts a defensive player. Pass league_id "
+                        "to see which one to target and when.",
+                "use": "idp_report"}
+    try:
+        from . import idp as idp_mod
+        items = bd.espn_scoring_items(league_id, CURRENT_SEASON - 1)
+        scoring = idp_mod.scoring_from_espn(items)
+        if not scoring:
+            return None
+        seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
+        board = idp_mod.build_board(sources.weekly_stats(seasons), scoring,
+                                    seasons=seasons, teams=league.teams,
+                                    idp_slots=int(league.starters.get("IDP", 1) or 1))
+        if board.empty:
+            return None
+        top = board.head(3)[["name", "position", "proj_points", "vor"]].to_dict("records")
+        return {
+            "targets": top,
+            "note": "Not placed in a round above, because defenders have no "
+                    "usable draft position -- consensus correlated 0.30 with "
+                    "real picks. Use idp_report with timing_seasons to see when "
+                    "they actually went in your league.",
+            "detail": "idp_report",
+        }
+    except Exception:
+        return None
+
 # ---------------------------------------------------------------- tools
 
 @mcp.tool()
@@ -1147,7 +1192,7 @@ def defense_report(position: str = "RB", limit: int = 32) -> str:
 
 
 @mcp.tool()
-def plan_my_draft(strategy: str = "balanced") -> str:
+def plan_my_draft(strategy: str = "balanced", league_id: str | None = None) -> str:
     """Simulate your whole draft from your slot and return the projected lineup.
 
     Runs the board forward pick by pick, using ADP to model who realistically falls
@@ -1210,6 +1255,7 @@ def plan_my_draft(strategy: str = "balanced") -> str:
         "strategy": strategy, "your_slot": state.my_slot,
         "projected_starters_points": round(total, 1),
         "final_roster": roster, "plan": plan,
+        "idp_pick": _idp_plan(league, league_id),
         "caveat": "ADP-driven simulation of an average draft room. Your league will "
                   "deviate — use who_should_i_pick live rather than following this script.",
     }, indent=2)

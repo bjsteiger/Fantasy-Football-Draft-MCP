@@ -116,15 +116,21 @@ the module, the tool, draft timing, forward projection.
 first `idp_report` of a live draft pays full cost. With 90 seconds per pick that
 matters.
 
-### 5. IDP rounds in the simulators
+### 5. IDP rounds in the simulators  *(done for plan_my_draft; declined for mock_draft)*
 
-`mock_draft` and `plan_my_draft` currently skip IDP rounds entirely, which is
-correct as far as it goes -- they cannot recommend a defender. Now that
-defenders can be scored and ranked, those rounds could be simulated properly
-instead of excluded.
+Checked before building, as the task said to, and the answer differed by tool.
 
-Check first whether this actually improves anything. Excluding them is honest;
-simulating them badly is worse than not simulating them.
+`plan_my_draft` now reports `idp_pick` -- the defenders worth targeting -- beside
+the plan rather than inside it. The plan is built pick by pick from ADP, modelling
+who realistically falls to you at each turn, and defenders have no usable draft
+position, so there is no honest way to say which round one lands in. The league's
+own history supports a window, not a round, so a window is what is given.
+
+`mock_draft` is deliberately left alone. Its opponents are ADP bots, and without
+a defensive market there is nothing for them to draft against. Inventing bot
+behaviour for a position whose real timing correlated 0.30 with published
+consensus would add noise and call it a simulation -- worse than the honest
+exclusion it replaces.
 
 ### 6. Score IDP rounds in draft_backtest
 
