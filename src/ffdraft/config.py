@@ -24,6 +24,15 @@ RECENCY_WEIGHTS = [0.05, 0.10, 0.17, 0.28, 0.40]
 
 FANTASY_POSITIONS = ("QB", "RB", "WR", "TE")
 
+# Bumped whenever a change alters projections or replacement level. Boards are
+# cached to disk keyed on league settings, and settings alone are not enough:
+# without this, a board written by older code is served forever, so a model
+# change silently does nothing until someone deletes the parquet by hand. The
+# cache key's own docstring already promised that "anything that changes
+# projections or replacement level must appear here" -- the model itself is
+# exactly that, and was the one thing missing.
+MODEL_VERSION = 2
+
 # Weekly point thresholds that count as a "startable" week, by position.
 # Used for the consistency / floor score.
 STARTABLE_THRESHOLD = {"QB": 18.0, "RB": 12.0, "WR": 12.0, "TE": 9.0}
@@ -146,7 +155,8 @@ class LeagueSettings:
         anything that changes projections or replacement level must appear here."""
         sc = ",".join(f"{k}={v}" for k, v in sorted(asdict(self.scoring).items()))
         st = ",".join(f"{k}={v}" for k, v in sorted(self.starters.items()))
-        raw = f"t{self.teams}|sf{self.superflex}|tep{self.te_premium_bonus}|{sc}|{st}"
+        raw = (f"m{MODEL_VERSION}|t{self.teams}|sf{self.superflex}"
+               f"|tep{self.te_premium_bonus}|{sc}|{st}")
         return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
