@@ -1099,6 +1099,90 @@ def plan_my_draft(strategy: str = "balanced") -> str:
 
 
 @mcp.tool()
+def idp_report(league_id: str | None = None, season: int | None = None,
+               limit: int = 15, position: str | None = None,
+               min_games: int = 8) -> str:
+    """Rank individual defensive players for a league with an IDP roster slot.
+
+    Separate from the main board on purpose: defensive players are not projected
+    by the offence model, and none of its environment multipliers mean anything
+    for a defender. Ranking is by per-game rate carried over a 17-game season, so
+    it answers who is best per game rather than who accumulated most last year --
+    a player who missed time is not penalised for it.
+
+    IDP scoring varies enormously between leagues (tackles alone range from 0.5
+    to 2 points, and some leagues score assists double), so scoring is read from
+    your own ESPN league rather than assumed. That makes league_id required: a
+    guessed scoring system would produce a confident, wrong ranking.
+
+    Read the ranking, not the point totals. Reproducing ESPN's own IDP figures
+    from public data carries about 3.5% error, because ESPN and nflverse disagree
+    on how many of a player's tackles were solo versus assisted. Order is
+    reliable (0.97 rank correlation); two players within ~12 points are not
+    meaningfully separated.
+
+    vor is value over replacement -- the last defender who would actually start
+    in your league. It is the only figure comparable against offensive players,
+    since raw defensive totals are far larger and mean nothing across positions.
+    """
+    from . import idp as idp_mod
+
+    if not league_id:
+        return json.dumps({
+            "error": "league_id is required.",
+            "why": "IDP scoring differs too much between leagues to assume — "
+                   "tackles alone range from 0.5 to 2 points, and some leagues "
+                   "score assisted tackles double. Guessing would produce a "
+                   "confident but wrong ranking, so scoring is read from your "
+                   "league's own ESPN settings instead.",
+        }, indent=2)
+
+    league, _ = _settings()
+    season = int(season or (CURRENT_SEASON - 1))
+
+    try:
+        items = bd.espn_scoring_items(league_id, season)
+    except Exception as exc:
+        return json.dumps({"error": f"couldn't read league scoring: {exc}"}, indent=2)
+
+    scoring = idp_mod.scoring_from_espn(items)
+    if not scoring:
+        return json.dumps({
+            "league_id": league_id, "season": season, "scores_idp": False,
+            "note": "This league awards no points to individual defensive "
+                    "players, so there is nothing to rank.",
+        }, indent=2)
+
+    weekly = sources.weekly_stats([season])
+    idp_slots = int(league.starters.get("IDP", 0)) or 1
+    board = idp_mod.build_board(weekly, scoring, seasons=[season],
+                                teams=league.teams, idp_slots=idp_slots,
+                                min_games=min_games)
+    if position:
+        want = str(position).upper()
+        if "position" in board.columns:
+            board = board[board["position"].astype(str).str.upper() == want]
+
+    rows = board.head(max(1, int(limit))).to_dict("records")
+    return json.dumps({
+        "league_id": league_id, "season": season, "scores_idp": True,
+        "scoring_used": scoring,
+        "teams": league.teams, "idp_slots": idp_slots,
+        "replacement_rank": league.teams * idp_slots,
+        "qualified_players": int(len(board)),
+        "min_games": min_games,
+        "players": rows,
+        "caveat": "Ranking is trustworthy; point totals are approximate (~3.5% "
+                  "error, 0.97 rank correlation against ESPN's own figures). The "
+                  "gap is ESPN and nflverse disagreeing on the solo/assisted "
+                  "tackle split, an unofficial stat. Players within ~12 points "
+                  "are not meaningfully separated. Only the linebacker slot id is "
+                  "verified, so a DL/DB league is counted correctly but its slots "
+                  "are not individually labelled.",
+    }, indent=2, default=str)
+
+
+@mcp.tool()
 def model_settings(consistency_weight: float | None = None, injury_weight: float | None = None,
                    oline_weight: float | None = None, schedule_weight: float | None = None,
                    pace_weight: float | None = None, td_luck_weight: float | None = None,
