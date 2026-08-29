@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # This repo's default branch is master. The trigger said [main], so no push
+    # to the default branch has ever run CI -- only pull_request did. That gap
+    # matters more now that pull requests can auto-merge unattended.
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
