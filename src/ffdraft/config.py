@@ -74,7 +74,10 @@ class LeagueSettings:
     snake: bool = True
     scoring: Scoring = field(default_factory=Scoring)
     starters: dict = field(default_factory=lambda: {
-        "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1,
+        # IDP counts individual defensive player slots. Like K and DST it is
+        # tracked but never modelled -- it is not in FANTASY_POSITIONS, so it
+        # cannot reach replacement levels, positional need or the board.
+        "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "IDP": 0,
     })
     flex_eligible: tuple = ("RB", "WR", "TE")
     te_premium_bonus: float = 0.0  # extra points per TE reception

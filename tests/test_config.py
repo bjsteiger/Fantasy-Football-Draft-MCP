@@ -106,3 +106,35 @@ class TestModelWeights:
         for name in ("oline", "pace_volume", "schedule", "injury", "age", "separation"):
             assert 0 <= getattr(w, name) <= 0.5
         assert 0 <= w.consistency_weight <= 1
+
+
+class TestUnmodelledSlotsStayContained:
+    """An IDP slot is tracked in starters but must never reach the model.
+
+    This is the same contract K and DST already have: the tool needs to know the
+    slot exists so round arithmetic is right, but LB is not in FANTASY_POSITIONS
+    and nothing position-keyed should grow an LB entry. Widening that reach is
+    what would fabricate fpa_LB / sos_LB_z -- "points a defense allows to
+    opposing linebackers" -- and multiply real QB/RB/WR/TE projections by it.
+    """
+
+    def test_replacement_ranks_ignores_the_idp_slot(self):
+        without = LeagueSettings(teams=10)
+        with_lb = LeagueSettings(teams=10, starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "IDP": 1,
+        })
+        assert with_lb.replacement_ranks() == without.replacement_ranks()
+
+    def test_replacement_ranks_never_emits_an_idp_key(self):
+        lg = LeagueSettings(starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "IDP": 1,
+        })
+        assert "IDP" not in lg.replacement_ranks()
+
+    def test_positional_need_never_emits_an_idp_key(self):
+        from ffdraft.model import _positional_need
+        lg = LeagueSettings(starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DST": 1, "IDP": 1,
+        })
+        need = _positional_need(lg, roster={"RB": 1, "IDP": 1})
+        assert "IDP" not in need

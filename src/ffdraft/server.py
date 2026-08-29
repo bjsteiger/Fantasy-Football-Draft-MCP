@@ -129,7 +129,7 @@ def _rows(df: pd.DataFrame, cols: list[str], n: int) -> list[dict]:
 def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6,
                      rounds: int = 16, scoring: str = "half_ppr", snake: bool = True,
                      qb: int = 1, rb: int = 2, wr: int = 2, te: int = 1, flex: int = 1,
-                     superflex: int = 0, te_premium_bonus: float = 0.0,
+                     idp: int = 0, superflex: int = 0, te_premium_bonus: float = 0.0,
                      consistency_weight: float = 0.35,
                      adp_csv_path: str | None = None) -> str:
     """Create or update a league, and make it the active one.
@@ -142,11 +142,18 @@ def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6
     slot, and te_premium_bonus for extra points per tight end reception.
     consistency_weight trades expected points against week-to-week reliability
     (0 = pure upside, 1 = pure floor).
+
+    idp is how many individual defensive player slots the league starts (a
+    linebacker, defensive back, edge rusher, or a generic defensive-player
+    flex). Defensive players are not projected by this tool, so the count is
+    used only to keep round arithmetic honest -- those rounds are excluded from
+    simulations rather than filled with a recommendation the model cannot make.
     """
     if not 1 <= draft_slot <= teams:
         return json.dumps({"error": f"draft_slot {draft_slot} is outside a {teams}-team league"})
 
-    starters = {"QB": qb, "RB": rb, "WR": wr, "TE": te, "FLEX": flex, "K": 1, "DST": 1}
+    starters = {"QB": qb, "RB": rb, "WR": wr, "TE": te, "FLEX": flex,
+                "K": 1, "DST": 1, "IDP": idp}
     league = LeagueSettings(
         name=name, teams=teams, rounds=rounds, draft_slot=draft_slot, snake=snake,
         scoring=Scoring.preset(scoring), starters=starters,

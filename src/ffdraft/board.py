@@ -449,6 +449,75 @@ _ESPN_FLEX_SLOTS = {"3": ("RB", "WR"), "5": ("WR", "TE"), "23": ("RB", "WR", "TE
                    "7": ("QB", "RB", "WR", "TE")}
 _ESPN_BASE_SLOTS = {"0": "QB", "2": "RB", "4": "WR", "6": "TE", "16": "DST", "17": "K"}
 
+# Slots that hold a player but are not a starting lineup spot, so they cost no
+# draft round of their own in the sense round arithmetic cares about.
+_ESPN_NON_STARTER_SLOTS = {"20", "21"}  # bench, injured reserve
+
+# Verified against a real league payload: the only starting slot in a 1-LB IDP
+# league that is neither offence, kicker, defence-unit, flex, bench nor IR.
+# Deliberately not a full IDP slot table -- ESPN's other defensive slot ids
+# (DL/DB/CB/S/EDR/...) are not verified here, and guessing them would put wrong
+# labels on real rosters. Anything unrecognised is still *counted* as an
+# unmodelled starter below, so round arithmetic stays correct without needing
+# the label.
+_ESPN_KNOWN_IDP_SLOTS = {"10": "LB"}
+
+
+def starters_from_slot_counts(slot_counts: dict) -> tuple[dict, int]:
+    """ESPN's lineupSlotCounts -> (starters, total roster slots).
+
+    Split out from espn_league_context so the translation can be tested without
+    the network, and because getting it wrong is silent: an unrecognised slot
+    used to fall through every branch and disappear from starters while still
+    being counted in roster_slots, which feeds `rounds`. A league with an LB slot
+    therefore reported one more round than it had skill positions to fill.
+
+    Unrecognised starting slots are summed into "IDP" rather than matched against
+    a hardcoded table of defensive slot ids. League configurations vary far more
+    than this module can enumerate -- DL, DB, CB, S, edge, punter, head coach --
+    and the round arithmetic only needs to know *how many* starting slots the
+    model cannot fill, not what each is called. `idp_slot_labels` reports the
+    breakdown for the ids that have actually been verified.
+
+    IDP is tracked here but is deliberately *not* in FANTASY_POSITIONS -- the
+    same contract K and DST have. The count is needed for round arithmetic; the
+    model itself does not project defensive players.
+    """
+    starters = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0,
+                "K": 0, "DST": 0, "IDP": 0}
+    for sid, count in (slot_counts or {}).items():
+        sid, count = str(sid), int(count or 0)
+        if not count or sid in _ESPN_NON_STARTER_SLOTS:
+            continue
+        if sid in _ESPN_BASE_SLOTS:
+            starters[_ESPN_BASE_SLOTS[sid]] += count
+        elif sid in _ESPN_FLEX_SLOTS:
+            starters["FLEX"] += count  # sub-eligibility isn't tracked, same as configure_league
+        else:
+            starters["IDP"] += count
+    roster_slots = sum(int(v or 0) for v in (slot_counts or {}).values())
+    return starters, roster_slots
+
+
+def idp_slot_labels(slot_counts: dict) -> dict:
+    """Which unmodelled starting slots a league has, for the ids we can name.
+
+    Returns e.g. {"LB": 1} for a 1-linebacker league. An unrecognised id is
+    reported under its raw ESPN slot number ("slot_13": 1) rather than guessed
+    at, so an unfamiliar league format is visibly unknown instead of silently
+    mislabelled.
+    """
+    out: dict[str, int] = {}
+    for sid, count in (slot_counts or {}).items():
+        sid, count = str(sid), int(count or 0)
+        if not count or sid in _ESPN_NON_STARTER_SLOTS:
+            continue
+        if sid in _ESPN_BASE_SLOTS or sid in _ESPN_FLEX_SLOTS:
+            continue
+        label = _ESPN_KNOWN_IDP_SLOTS.get(sid, f"slot_{sid}")
+        out[label] = out.get(label, 0) + count
+    return out
+
 
 def espn_league_context(league_id: str, season: int = CURRENT_SEASON,
                         swid: str | None = None, espn_s2: str | None = None) -> dict:
@@ -480,13 +549,7 @@ def espn_league_context(league_id: str, season: int = CURRENT_SEASON,
     scoring = "ppr" if rec_pts >= 0.9 else "half_ppr" if rec_pts >= 0.35 else "standard"
 
     slot_counts = settings.get("rosterSettings", {}).get("lineupSlotCounts", {}) or {}
-    starters = {"QB": 0, "RB": 0, "WR": 0, "TE": 0, "FLEX": 0, "K": 0, "DST": 0}
-    for sid, count in slot_counts.items():
-        if sid in _ESPN_BASE_SLOTS and count:
-            starters[_ESPN_BASE_SLOTS[sid]] += count
-        elif sid in _ESPN_FLEX_SLOTS and count:
-            starters["FLEX"] += count  # sub-eligibility isn't tracked, same as configure_league
-    roster_slots = sum(int(v) for v in slot_counts.values())
+    starters, roster_slots = starters_from_slot_counts(slot_counts)
 
     my_team = None
     if swid:
@@ -506,6 +569,7 @@ def espn_league_context(league_id: str, season: int = CURRENT_SEASON,
         "teams": len(teams),
         "scoring": scoring,
         "starters": starters,
+        "idp_slots": idp_slot_labels(slot_counts),
         "rounds": max(1, roster_slots),
         "my_team_id": my_team["id"] if my_team is not None else None,
         "draft_slot": draft_slot,
