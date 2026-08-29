@@ -198,3 +198,60 @@ def build_board(weekly: pd.DataFrame, scoring: dict[str, float],
     cols = [c for c in ("name", "player_id", "position", "games",
                         "proj_points", "ppg", "vor", "pos_rank") if c in agg.columns]
     return agg[cols]
+
+
+def draft_timing(defender_picks_by_season: dict[int, list[int]], teams: int,
+                 my_picks: list[int] | None = None) -> dict:
+    """When defenders actually leave the board, from a league's own draft history.
+
+    This exists instead of a per-player IDP average draft position, and the
+    reason is a measured one rather than a shortcut. Published IDP consensus
+    barely predicts when defenders go: across two real seasons of one league,
+    consensus rank against actual pick correlated 0.30 (0.48 on ranks), versus
+    the near-lockstep relationship the offence side relies on. In one season the
+    16th-ranked linebacker went first and the 2nd-ranked fell thirteen picks
+    later; in the next, the consensus IDP1 went fifth among defenders.
+
+    Attaching a per-player ADP to that would dress up noise as a market. What
+    *is* stable is the envelope -- defenders start going in a predictable window
+    and are gone by another -- so that is what this reports: how many are off the
+    board by a given pick, which is what "can I wait?" actually depends on.
+
+    Needs the league's own history. A different league drafts defenders on a
+    completely different schedule, and there is no general answer to substitute.
+    """
+    seasons = {int(k): sorted(v or []) for k, v in (defender_picks_by_season or {}).items()}
+    if not seasons or not any(seasons.values()):
+        return {"seasons": [], "note": "no defender picks found in this league's history"}
+
+    rounds = {}
+    max_pick = max((max(v) for v in seasons.values() if v), default=0)
+    for cut in range(teams, max_pick + teams, teams):
+        gone = {s: sum(1 for p in v if p <= cut) for s, v in seasons.items()}
+        vals = list(gone.values())
+        rounds[cut] = {"round": (cut - 1) // teams + 1, "by_season": gone,
+                       "mean_gone": round(sum(vals) / len(vals), 1)}
+
+    firsts = {s: min(v) for s, v in seasons.items() if v}
+    lasts = {s: max(v) for s, v in seasons.items() if v}
+    at_my_picks = None
+    if my_picks:
+        at_my_picks = [
+            {"pick": p, "round": (p - 1) // teams + 1,
+             "mean_gone_before": round(
+                 sum(sum(1 for x in v if x < p) for v in seasons.values()) / len(seasons), 1)}
+            for p in my_picks
+        ]
+    return {
+        "seasons": sorted(seasons),
+        "first_defender_pick": firsts,
+        "last_defender_pick": lasts,
+        "gone_by_pick": rounds,
+        "at_my_picks": at_my_picks,
+        "caveat": "From this league's own drafts only, and a small sample -- two "
+                  "seasons is roughly twenty picks. Treat it as a window, not a "
+                  "schedule. Published IDP consensus is deliberately not used to "
+                  "predict individual timing: it correlated 0.30 with actual pick "
+                  "here, so which specific defender goes when is close to noise. "
+                  "The useful signal is how many are gone, not which.",
+    }

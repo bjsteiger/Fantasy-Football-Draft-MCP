@@ -1101,7 +1101,7 @@ def plan_my_draft(strategy: str = "balanced") -> str:
 @mcp.tool()
 def idp_report(league_id: str | None = None, season: int | None = None,
                limit: int = 15, position: str | None = None,
-               min_games: int = 8) -> str:
+               min_games: int = 8, timing_seasons: str | None = None) -> str:
     """Rank individual defensive players for a league with an IDP roster slot.
 
     Separate from the main board on purpose: defensive players are not projected
@@ -1124,6 +1124,13 @@ def idp_report(league_id: str | None = None, season: int | None = None,
     vor is value over replacement -- the last defender who would actually start
     in your league. It is the only figure comparable against offensive players,
     since raw defensive totals are far larger and mean nothing across positions.
+
+    timing_seasons ("2024,2025") adds when defenders actually left the board in
+    your league's own past drafts, which is what "can I wait?" depends on. There
+    is deliberately no per-player IDP draft position: published IDP consensus
+    correlated 0.30 with actual pick across two real seasons, so which specific
+    defender goes when is close to noise. How many are gone by a given pick is
+    the part that holds.
     """
     from . import idp as idp_mod
 
@@ -1163,6 +1170,24 @@ def idp_report(league_id: str | None = None, season: int | None = None,
         if "position" in board.columns:
             board = board[board["position"].astype(str).str.upper() == want]
 
+    timing = None
+    if timing_seasons:
+        try:
+            want = [int(x) for x in str(timing_seasons).replace(" ", "").split(",") if x]
+            hist = sources.weekly_stats(want)
+            grp = (hist.dropna(subset=["player_display_name"])
+                       .drop_duplicates("player_display_name")
+                       .set_index("player_display_name")["position_group"].to_dict())
+            by_season = {}
+            for yr in want:
+                by_season[yr] = sorted(
+                    pk["overall"] for pk in bd.sync_espn(league_id, season=yr)
+                    if grp.get(pk["name"]) in idp_mod.DEFENSIVE_GROUPS and pk.get("overall"))
+            timing = idp_mod.draft_timing(by_season, teams=league.teams,
+                                          my_picks=league.picks_for_slot())
+        except Exception as exc:
+            timing = {"error": f"couldn't read draft history: {exc}"}
+
     rows = board.head(max(1, int(limit))).to_dict("records")
     return json.dumps({
         "league_id": league_id, "season": season, "scores_idp": True,
@@ -1172,6 +1197,7 @@ def idp_report(league_id: str | None = None, season: int | None = None,
         "qualified_players": int(len(board)),
         "min_games": min_games,
         "players": rows,
+        "draft_timing": timing,
         "caveat": "Ranking is trustworthy; point totals are approximate (~3.5% "
                   "error, 0.97 rank correlation against ESPN's own figures). The "
                   "gap is ESPN and nflverse disagreeing on the solo/assisted "
