@@ -319,3 +319,42 @@ class TestStalePlayersExcluded:
         rows = pd.DataFrame([_wk("Solo", 2025, wk, solo=10) for wk in range(1, 18)])
         assert "Solo" in set(idp.build_board(rows, {"tackles_solo": 1.0},
                                              seasons=[2025])["name"])
+
+
+class TestIdpOptionGating:
+    """When the defender option should and should not appear.
+
+    Shown next to the ranked recommendations rather than inside them: the
+    offence ranking weighs value against the chance a player survives to your
+    next pick, and defenders have no reliable draft market to estimate survival
+    from (published IDP consensus correlated 0.30 with actual pick). Ranking
+    them together would imply a comparability that does not exist.
+    """
+
+    def _league(self, idp_slots, filled):
+        from ffdraft.config import LeagueSettings
+        lg = LeagueSettings(teams=10, starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1,
+            "K": 1, "DST": 1, "IDP": idp_slots})
+        return lg, ({"IDP": filled} if filled else {})
+
+    def test_no_option_when_the_league_has_no_idp_slot(self):
+        from ffdraft import server
+        lg, roster = self._league(0, 0)
+        assert server._idp_option(lg, roster, 85) is None
+
+    def test_no_option_once_the_slot_is_filled(self):
+        from ffdraft import server
+        lg, roster = self._league(1, 1)
+        assert server._idp_option(lg, roster, 85) is None
+
+    def test_unfilled_slot_without_a_league_id_says_what_is_needed(self):
+        from ffdraft import server
+        lg, roster = self._league(1, 0)
+        out = server._idp_option(lg, roster, 85)
+        assert out and out["use"] == "idp_report"
+
+    def test_multiple_slots_still_open_after_one_is_filled(self):
+        from ffdraft import server
+        lg, roster = self._league(2, 1)
+        assert server._idp_option(lg, roster, 85) is not None

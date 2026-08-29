@@ -72,6 +72,15 @@ you're on the clock and want the full picture at once.
 The main one. Returns ranked recommendations with reasoning, the pick being evaluated,
 your roster, and each player's odds of surviving to your next pick.
 
+In a league with an IDP slot, pass `league_id` and the best available defender is
+reported alongside as `idp_option`, so you do not have to run a second tool while
+the clock is running. It sits *beside* the ranked list rather than inside it: the
+ranking weighs value against the chance a player survives to your next pick, and
+defenders have no reliable draft market to estimate survival from (published IDP
+consensus correlated 0.30 with actual pick in a real league). `vor` is directly
+comparable with the offensive rows -- a weekly score sums starters wherever they
+line up.
+
 ### `best_available`
 Next best on the board. `sort_by`: `draft_score` (balanced), `vor`, `consistency`,
 `proj_points`, or `value` (biggest ADP-to-model gap). Filter with `position`.
