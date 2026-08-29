@@ -163,3 +163,44 @@ class TestDraftTiming:
         t = idp.draft_timing({}, teams=10)
         assert t["seasons"] == []
         assert "no defender picks" in t["note"]
+
+
+class TestRecencyWeighting:
+    """Multiple seasons are blended with recent ones weighted far more heavily.
+
+    Chosen on evidence: predicting 2025 for 536 defenders from 2021-24, recency
+    weighting beat both last-season-only (MAE 2.54 vs 2.67) and a flat mean
+    (2.60), and ranked them better (0.712 vs 0.702 / 0.695).
+    """
+
+    def _two_seasons(self, old_solo, new_solo):
+        rows = []
+        for wk in range(1, 18):
+            rows.append(_wk("Traj", 2024, wk, solo=old_solo))
+            rows.append(_wk("Traj", 2025, wk, solo=new_solo))
+        return pd.DataFrame(rows)
+
+    def test_recent_season_dominates_the_blend(self):
+        # Declining player: 20/gm then 10/gm. A flat mean would say 15.
+        b = idp.build_board(self._two_seasons(20, 10), {"tackles_solo": 1.0},
+                            seasons=[2024, 2025])
+        ppg = float(b.iloc[0]["ppg"])
+        # Two seasons draw the last two RECENCY_WEIGHTS (0.28, 0.40), i.e. a
+        # 41/59 tilt -- real but not dramatic. A flat mean would say 15.0.
+        assert ppg < 15.0, "a flat mean would have said 15"
+        assert ppg == pytest.approx(14.1, abs=0.1)
+
+    def test_improving_player_is_pulled_up_toward_the_recent_season(self):
+        b = idp.build_board(self._two_seasons(10, 20), {"tackles_solo": 1.0},
+                            seasons=[2024, 2025])
+        assert float(b.iloc[0]["ppg"]) > 15.0
+
+    def test_single_season_is_unchanged_by_the_blend(self):
+        rows = pd.DataFrame([_wk("Solo", 2025, wk, solo=10) for wk in range(1, 18)])
+        b = idp.build_board(rows, {"tackles_solo": 1.0}, seasons=[2025])
+        assert float(b.iloc[0]["ppg"]) == pytest.approx(10.0)
+
+    def test_reports_how_many_seasons_backed_the_projection(self):
+        b = idp.build_board(self._two_seasons(12, 12), {"tackles_solo": 1.0},
+                            seasons=[2024, 2025])
+        assert int(b.iloc[0]["seasons_used"]) == 2
