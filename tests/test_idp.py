@@ -358,3 +358,35 @@ class TestIdpOptionGating:
         from ffdraft import server
         lg, roster = self._league(2, 1)
         assert server._idp_option(lg, roster, 85) is not None
+
+
+class TestIdpSeasonFinish:
+    """Real defensive points for one season, for scoring a past draft pick.
+
+    adp.season_finish filters to FANTASY_POSITIONS, so it reports a linebacker
+    as having had no season at all -- which is why a drafted defender came back
+    from draft_backtest with a blank where his result should be.
+    """
+
+    def _rows(self):
+        rows = []
+        for wk in range(1, 18):
+            rows.append(_wk("Big Year", 2025, wk, solo=10))
+            rows.append(_wk("Quiet Year", 2025, wk, solo=3))
+        rows.append(_wk("Hurt Early", 2025, 1, solo=12))   # one game, then injured
+        return pd.DataFrame(rows)
+
+    def test_ranks_defenders_by_real_points(self):
+        f = idp.season_finish(self._rows(), {"tackles_solo": 1.0}, 2025)
+        assert list(f["name"])[:2] == ["Big Year", "Quiet Year"]
+        assert float(f.iloc[0]["points"]) == pytest.approx(170.0)
+
+    def test_keeps_an_injured_player_rather_than_filtering_him_out(self):
+        # A pick that busted through injury is the outcome worth reporting.
+        f = idp.season_finish(self._rows(), {"tackles_solo": 1.0}, 2025)
+        assert "Hurt Early" in set(f["name"])
+        assert int(f[f["name"] == "Hurt Early"].iloc[0]["games"]) == 1
+
+    def test_a_season_with_no_data_returns_an_empty_frame(self):
+        f = idp.season_finish(self._rows(), {"tackles_solo": 1.0}, 2019)
+        assert f.empty and "pos_rank" in f.columns

@@ -529,6 +529,51 @@ def repeat_value_players(hist: pd.DataFrame, min_seasons: int = 2) -> pd.DataFra
 _OPTIMAL_POSITION_CAPS = {"QB": 1, "RB": 5, "WR": 6, "TE": 2}
 
 
+
+def _idp_pick_result(name: str, league_id: str, season: int) -> dict | None:
+    """What a drafted defender actually did, for a round the offence cannot score.
+
+    Reported but deliberately NOT added to the totals. The algo_pick and
+    optimal_pick for this round are offensive players, because the recommender
+    cannot choose a defender -- it ranks by opportunity cost, and defenders have
+    no draft market to estimate survival from. Counting your real defensive
+    points against their offensive alternatives would compare two different
+    things and flatter whichever side happened to score more, which is the same
+    unfairness the None guard above already exists to prevent.
+
+    So this answers "was that a good pick" without touching "did the algorithm
+    beat you".
+    """
+    try:
+        from . import board as bd
+        from . import idp as idp_mod
+        from . import sources as src
+        items = bd.espn_scoring_items(league_id, season)
+        scoring = idp_mod.scoring_from_espn(items)
+        if not scoring:
+            return None
+        fin = idp_mod.season_finish(src.weekly_stats([season]), scoring, season)
+        if fin.empty:
+            return None
+        hit = fin[fin["name"] == name]
+        if hit.empty:
+            return None
+        r = hit.iloc[0]
+        total = len(fin)
+        return {
+            "points": round(float(r["points"]), 1),
+            "games": int(r["games"]),
+            "position_rank": int(r["pos_rank"]),
+            "of_defenders": total,
+            "note": "Real defensive points under your league's scoring. Left out "
+                    "of the totals on purpose: the algorithm cannot pick a "
+                    "defender, so its alternative for this round is an offensive "
+                    "player and the two are not comparable.",
+        }
+    except Exception:
+        return None
+
+
 def draft_backtest(league_id: str, season: int, platform: str = "espn",
                    top_n: int = 3) -> dict:
     """Replay a real past draft leak-free: what the live algorithm would have
@@ -740,6 +785,10 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
                 algo_total += ap or 0.0
                 optimal_total += op or 0.0
 
+            idp_result = None
+            if yp is None:
+                idp_result = _idp_pick_result(p["name"], league_id, season)
+
             rows.append({
                 "round": (overall - 1) // league.teams + 1, "overall": overall,
                 # A round spent on a kicker, defence unit or defensive player has
@@ -751,6 +800,7 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
                 # returned if spent on a skill player -- but they are excluded
                 # from the totals above, so the comparison stays fair.
                 "your_pick_unmodelled_position": yp is None,
+                "your_pick_idp_result": idp_result,
                 "your_pick": p["name"], "your_points": round(yp, 1) if yp is not None else None,
                 "your_pick_value": value_info(p["name"]), "your_pick_team_context": team_ctx(p["name"]),
                 "algo_pick": algo_name, "algo_points": round(ap, 1) if ap is not None else None,

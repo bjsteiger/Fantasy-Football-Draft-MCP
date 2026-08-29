@@ -135,11 +135,23 @@ could carry a real value verdict and count toward the comparison.
 Note the totals guard exists for a good reason (see the comment in `adp.py`) --
 changing it means re-verifying that the algorithm/optimal comparison stays fair.
 
-### 7. Verify the other IDP slot ids
+### 7. Verify the other IDP slot ids  *(investigated -- not resolvable, closed)*
 
-Only slot `10` (LB) is verified against a real payload. A DL/DB/edge league is
-counted correctly but its slots cannot be named. Resolve the same way the
-scoring was: against real league data, not a community table.
+Attempted the same way the scoring was derived: read `eligibleSlots` off real
+players and infer which slot id belongs to which position.
+
+It does not resolve. Eligibility spans hybrid and utility slots rather than
+mapping cleanly to positions -- Ja'Marr Chase, a receiver, carries slots 14 and
+15; a safety carries slot 10; a defensive lineman carries running back slots.
+Only `10 = LB` is unambiguous, and that is already encoded.
+
+Deriving a DL/DB/edge table from this would mean guessing, which is what
+`_ESPN_KNOWN_IDP_SLOTS` exists to avoid. The generic count in
+`starters_from_slot_counts` already keeps round arithmetic correct for those
+leagues without naming their slots, which is the part that actually matters.
+
+Reopen only with access to a real DL/DB league's payload, where the slot ids in
+`lineupSlotCounts` can be read against a roster that actually uses them.
 
 ## Reference
 
