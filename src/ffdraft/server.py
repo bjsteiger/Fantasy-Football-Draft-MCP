@@ -1367,9 +1367,20 @@ def idp_report(league_id: str | None = None, season: int | None = None,
                     "players, so there is nothing to rank.",
         }, indent=2)
 
-    weekly = sources.weekly_stats([season])
+    # Project across the same lookback window the recommendation path uses, not
+    # the single season this once read. Building one board from 2025 and another
+    # from 2021-25 meant the two disagreed about who the best defender was --
+    # idp_report said Blake Cashman at 89.9 value over replacement while
+    # who_should_i_pick and plan_my_draft said Alex Singleton at 34.0. Same
+    # question, different answer depending on which tool you happened to ask.
+    # `season` still selects which season's scoring rules to read, which matters:
+    # this league sextupled its IDP scoring between 2024 and 2025.
+    seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
+    if season not in seasons:
+        seasons = [season]
+    weekly = sources.weekly_stats(seasons)
     idp_slots = int(league.starters.get("IDP", 0)) or 1
-    board = idp_mod.build_board(weekly, scoring, seasons=[season],
+    board = idp_mod.build_board(weekly, scoring, seasons=seasons,
                                 teams=league.teams, idp_slots=idp_slots,
                                 min_games=min_games)
     if position:
@@ -1398,6 +1409,7 @@ def idp_report(league_id: str | None = None, season: int | None = None,
     rows = board.head(max(1, int(limit))).to_dict("records")
     return json.dumps({
         "league_id": league_id, "season": season, "scores_idp": True,
+        "projected_from_seasons": seasons,
         "scoring_used": scoring,
         "teams": league.teams, "idp_slots": idp_slots,
         "replacement_rank": league.teams * idp_slots,

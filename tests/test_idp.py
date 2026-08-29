@@ -410,3 +410,40 @@ class TestIdpSeasonFinish:
     def test_a_season_with_no_data_returns_an_empty_frame(self):
         f = idp.season_finish(self._rows(), {"tackles_solo": 1.0}, 2019)
         assert f.empty and "pos_rank" in f.columns
+
+
+class TestBoardConsistencyAcrossEntryPoints:
+    """Every entry point must project defenders the same way.
+
+    idp_report once built a single-season board while who_should_i_pick and
+    plan_my_draft built the recency-weighted multi-season one, so the tools
+    disagreed about who the best defender was -- Blake Cashman at 89.9 value
+    over replacement versus Alex Singleton at 34.0, depending on which one you
+    asked. Same question, different answer.
+    """
+
+    def _weeks(self):
+        rows = []
+        for wk in range(1, 18):
+            # Peaked early, declining: a single-season view and a recency-weighted
+            # multi-season view rank these two differently.
+            for yr, solo in ((2023, 20), (2024, 14), (2025, 8)):
+                rows.append(_wk("Declining", yr, wk, solo=solo))
+            for yr in (2023, 2024, 2025):
+                rows.append(_wk("Steady", yr, wk, solo=11))
+        return pd.DataFrame(rows)
+
+    def test_single_and_multi_season_boards_genuinely_differ(self):
+        # Guards the premise: if these agreed, the test below would prove nothing.
+        one = idp.build_board(self._weeks(), {"tackles_solo": 1.0}, seasons=[2025])
+        multi = idp.build_board(self._weeks(), {"tackles_solo": 1.0},
+                                seasons=[2023, 2024, 2025])
+        assert list(one["name"])[0] != list(multi["name"])[0]
+
+    def test_same_window_gives_the_same_board(self):
+        a = idp.build_board(self._weeks(), {"tackles_solo": 1.0},
+                            seasons=[2023, 2024, 2025], teams=10, idp_slots=1)
+        b = idp.build_board(self._weeks(), {"tackles_solo": 1.0},
+                            seasons=[2023, 2024, 2025], teams=10, idp_slots=1)
+        assert list(a["name"]) == list(b["name"])
+        assert list(a["vor"]) == list(b["vor"])
