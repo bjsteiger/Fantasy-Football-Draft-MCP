@@ -553,7 +553,8 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
         a past season instead of always reading the current one
 
     Only ESPN is supported (auto-detects your team and draft slot from
-    ESPN_SWID/ESPN_S2). K/DST aren't modelled anywhere in this tool, so those
+    ESPN_SWID/ESPN_S2). Kickers, defence units and individual defensive players
+    aren't modelled anywhere in this tool, so those
     rounds report your actual pick with no comparison, same as everywhere else.
     """
     from . import board as bd
@@ -741,6 +742,15 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
 
             rows.append({
                 "round": (overall - 1) // league.teams + 1, "overall": overall,
+                # A round spent on a kicker, defence unit or defensive player has
+                # no points and no value verdict, because none of those are
+                # modelled. Without saying so the row just looks like a player
+                # who scored nothing, which reads as a catastrophic bust rather
+                # than a position the tool does not cover. algo_pick/optimal_pick
+                # are still shown -- they are what those rounds would have
+                # returned if spent on a skill player -- but they are excluded
+                # from the totals above, so the comparison stays fair.
+                "your_pick_unmodelled_position": yp is None,
                 "your_pick": p["name"], "your_points": round(yp, 1) if yp is not None else None,
                 "your_pick_value": value_info(p["name"]), "your_pick_team_context": team_ctx(p["name"]),
                 "algo_pick": algo_name, "algo_points": round(ap, 1) if ap is not None else None,
@@ -761,7 +771,9 @@ def draft_backtest(league_id: str, season: int, platform: str = "espn",
     return {
         "league": ctx["league_name"], "season": season, "teams": ctx["teams"],
         "scoring": ctx["scoring"], "your_draft_slot": league.draft_slot,
-        "note": "K/DST aren't modelled -- those rounds show your actual pick only. "
+        "note": "Kickers, defence units and individual defensive players aren't "
+                "modelled, so those rounds show your actual pick only, flagged with "
+                "your_pick_unmodelled_position, and are left out of the totals. "
                 "algo_pick is what who_should_i_pick would say live; optimal_pick is "
                 "the true hindsight-best value-over-replacement pick, QB capped at 1 "
                 "since a second quarterback can't start. *_value compares preseason "
@@ -808,7 +820,8 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
     most-common picks and how often each one showed up, so low-consistency
     rounds (usually round 6+) are visible rather than hidden behind one draw.
 
-    K/DST aren't modelled, so only the league's skill-position rounds are
+    Kickers, defence units and individual defensive players aren't modelled, so
+    only the league's skill-position rounds are
     simulated (total rounds minus K and DST starting slots).
     """
     from . import board as bd
@@ -948,7 +961,8 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
         "simulated_rounds": sim_rounds, "scored_on": scored_on,
         "note": ("Other teams are ADP bots with reach/fall noise, not real opponents "
                  "-- this is a stress test of the algorithm's typical behavior, not a "
-                 "replay of any specific draft. K/DST aren't modelled, so only "
+                 "replay of any specific draft. Kickers, defence units and "
+                 "individual defensive players aren't modelled, so only "
                  "skill-position rounds are simulated. "
                  + (f"{season} hasn't been played -- picks are scored on the model's "
                     "own proj_points (leak-free through the prior season), not real "
