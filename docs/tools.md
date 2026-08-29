@@ -141,6 +141,34 @@ Needs the `fixed_drive_result`/`drive` play-by-play columns, added after earlier
 `play_by_play` parquets were built. If `drive_efficiency`/`redzone_identity` come back
 empty for a season that should have data, run `refresh_data(force_download=true)`.
 
+### `idp_report`
+Ranks individual defensive players for a league with an IDP roster slot. Separate
+from the main board because defensive players are not projected by the offence
+model and none of its environment multipliers mean anything for a defender.
+
+`league_id` is required and is not a convenience: IDP scoring differs enormously
+between leagues -- tackles alone range from 0.5 to 2 points, and some leagues
+score assisted tackles double -- so scoring is read from your own ESPN settings
+rather than assumed. A guessed scoring system would produce a confident, wrong
+ranking.
+
+Ranks by per-game rate carried over a 17-game season, so it answers who is best
+per game rather than who accumulated most: a player who missed time is not
+penalised for it. `vor` is value over replacement (the last defender who would
+actually start in your league) and is the only figure comparable against
+offensive players -- raw defensive totals are far larger and mean nothing across
+positions.
+
+**Read the order, not the totals.** Reproducing ESPN's own IDP figures from
+public data carries ~3.5% error, because ESPN and nflverse disagree on how many
+of a player's tackles were solo versus assisted -- an unofficial, human-scored
+stat. Rank correlation is 0.97, so the ordering holds; two players within ~12
+points are not meaningfully separated. See
+[idp-scoring-derivation.md](idp-scoring-derivation.md).
+
+`min_games` (default 8) gates the per-game rate. Without it a player with one big
+game projects a rate no starter sustains and lands at number one.
+
 ### `defense_report`
 Fantasy points allowed by position, current season and five-year. Rank 1 = toughest.
 

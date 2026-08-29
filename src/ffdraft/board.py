@@ -519,6 +519,31 @@ def idp_slot_labels(slot_counts: dict) -> dict:
     return out
 
 
+def espn_scoring_items(league_id: str, season: int = CURRENT_SEASON,
+                       swid: str | None = None,
+                       espn_s2: str | None = None) -> list[dict]:
+    """A league's raw scoring rules, straight from ESPN.
+
+    Returned unparsed, as a list of {statId, points, pointsOverrides}. Callers
+    interpret the statIds themselves -- the offence side reads one of them to
+    detect PPR, and idp.py maps the defensive ones -- so this stays a plain
+    fetch rather than deciding on their behalf what the numbers mean.
+    """
+    swid = swid or os.environ.get("ESPN_SWID")
+    espn_s2 = espn_s2 or os.environ.get("ESPN_S2")
+    cookies = {}
+    if swid and espn_s2:
+        cookies = {"SWID": swid if swid.startswith("{") else f"{{{swid}}}",
+                   "espn_s2": espn_s2}
+    url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
+           f"/segments/0/leagues/{league_id}")
+    resp = requests.get(url, params={"view": "mSettings"}, cookies=cookies, timeout=20,
+                        headers={"User-Agent": "ffdraft-mcp/1.0"})
+    resp.raise_for_status()
+    settings = resp.json().get("settings") or {}
+    return (settings.get("scoringSettings") or {}).get("scoringItems") or []
+
+
 def espn_league_context(league_id: str, season: int = CURRENT_SEASON,
                         swid: str | None = None, espn_s2: str | None = None) -> dict:
     """Everything needed to configure a league and find yourself in it, read
