@@ -129,3 +129,37 @@ class TestSmallSampleGate:
     def test_everyone_below_the_gate_yields_an_empty_board(self):
         rows = pd.DataFrame([_wk("Cameo", 2025, 1, solo=5)])
         assert idp.build_board(rows, {"tackles_solo": 1.0}, seasons=[2025]).empty
+
+
+class TestDraftTiming:
+    """When defenders leave the board, from a league's own history.
+
+    Deliberately not a per-player ADP: published IDP consensus correlated only
+    0.30 with actual pick across two real seasons, so per-player timing would be
+    noise wearing a market's clothes. The count is the stable part.
+    """
+
+    picks = {2024: [77, 78, 80, 85, 90, 94, 99, 108, 109, 124],
+             2025: [47, 60, 74, 76, 84, 86, 91, 113, 123, 125, 139, 143]}
+
+    def test_counts_defenders_gone_by_each_round(self):
+        t = idp.draft_timing(self.picks, teams=10)
+        assert t["gone_by_pick"][80]["by_season"][2024] == 3
+        assert t["gone_by_pick"][80]["by_season"][2025] == 4
+        assert t["gone_by_pick"][80]["mean_gone"] == pytest.approx(3.5)
+
+    def test_reports_the_window_defenders_go_in(self):
+        t = idp.draft_timing(self.picks, teams=10)
+        assert t["first_defender_pick"] == {2024: 77, 2025: 47}
+        assert t["last_defender_pick"] == {2024: 124, 2025: 143}
+
+    def test_answers_how_many_are_gone_before_each_of_my_picks(self):
+        t = idp.draft_timing(self.picks, teams=10, my_picks=[85, 96])
+        at = {r["pick"]: r["mean_gone_before"] for r in t["at_my_picks"]}
+        assert at[85] == pytest.approx(4.0)   # 2024: 3, 2025: 5
+        assert at[96] == pytest.approx(6.5)   # 2024: 6, 2025: 7
+
+    def test_a_league_with_no_defender_history_says_so(self):
+        t = idp.draft_timing({}, teams=10)
+        assert t["seasons"] == []
+        assert "no defender picks" in t["note"]
