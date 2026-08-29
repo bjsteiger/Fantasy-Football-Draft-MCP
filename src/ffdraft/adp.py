@@ -895,8 +895,13 @@ def mock_draft(league, weights, season: int, n_trials: int = 30,
                 my_picks_this_trial.append((rnd, chosen))
             else:
                 r = rosters[slot]
+                # r is bound as a default argument, not captured: the loop
+                # rebinds it every pick, and a late-binding closure would read
+                # whichever roster the loop happened to end on. Harmless today
+                # because .map() consumes the lambda immediately, but it stays
+                # correct if this is ever deferred.
                 avail = pool[pool["position"].map(
-                    lambda p: r.get(p, 0) < _MOCK_BOT_CAPS.get(p, 99))]
+                    lambda p, r=r: r.get(p, 0) < _MOCK_BOT_CAPS.get(p, 99))]
                 if avail.empty:
                     avail = pool
                 sigma = np.maximum(3.0, 0.25 * avail["adp"].to_numpy())
@@ -1056,7 +1061,9 @@ def champion_strategies(league_id: str, seasons: list[int]) -> dict:
     data but no value verdicts or steal context. ESPN only.
     """
     import os
+
     import requests
+
     from . import board as bd
     from . import sources
     from .board import norm_name
