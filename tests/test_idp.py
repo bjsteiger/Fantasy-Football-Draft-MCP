@@ -256,3 +256,125 @@ class TestNoDeadEnds:
     def test_position_check_is_case_insensitive(self):
         from ffdraft import server
         assert server._idp_pointer(position="lb") is not None
+class TestSingleSeasonShrink:
+    """One season and five seasons are not equally knowable.
+
+    Measured: predicting a held-out season, one-season defenders landed at 2.80
+    MAE / 0.607 rank correlation against 2.30 / 0.854 for four-season players.
+    A 0.15 pull toward the upper-half mean improved both metrics on two
+    independent folds and was the optimum in each.
+    """
+
+    def _mixed(self):
+        rows = []
+        for wk in range(1, 18):                      # veteran, 4 seasons, steady
+            for yr in (2022, 2023, 2024, 2025):
+                rows.append(_wk("Veteran", yr, wk, solo=10))
+            rows.append(_wk("Rookie", 2025, wk, solo=20))   # one season, hot
+            rows.append(_wk("Filler", 2025, wk, solo=4))
+            for yr in (2024, 2025):
+                rows.append(_wk("Filler Two", yr, wk, solo=5))
+        return pd.DataFrame(rows)
+
+    def test_one_season_player_is_pulled_toward_the_anchor(self):
+        b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        rookie = b[b["name"] == "Rookie"].iloc[0]
+        assert float(rookie["ppg"]) < 20.0, "an unshrunk rookie would sit at 20"
+
+    def test_multi_season_players_are_untouched(self):
+        b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        vet = b[b["name"] == "Veteran"].iloc[0]
+        assert float(vet["ppg"]) == pytest.approx(10.0)
+
+    def test_shrink_is_gentle_not_a_reordering(self):
+        # The rookie is genuinely better and must stay ahead of the veteran.
+        b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        order = list(b["name"])
+        assert order.index("Rookie") < order.index("Veteran")
+
+    def test_a_board_with_no_single_season_players_is_unchanged(self):
+        rows = []
+        for wk in range(1, 18):
+            for yr in (2024, 2025):
+                rows.append(_wk("A", yr, wk, solo=10))
+                rows.append(_wk("B", yr, wk, solo=6))
+        b = idp.build_board(pd.DataFrame(rows), {"tackles_solo": 1.0},
+                            seasons=[2024, 2025])
+        assert float(b[b["name"] == "A"].iloc[0]["ppg"]) == pytest.approx(10.0)
+
+
+class TestStalePlayersExcluded:
+    """A player who has stopped playing must not rank.
+
+    A multi-season average will happily keep ranking someone who is gone: on a
+    real 2026 board built from 2021-25, C.J. Mosley came out FIRST despite last
+    appearing in 2024 for four games, his three strong seasons outweighing his
+    absence. Every test passed at the time.
+    """
+
+    def _rows(self):
+        rows = []
+        for wk in range(1, 18):
+            for yr in (2022, 2023):
+                rows.append(_wk("Retired Star", yr, wk, solo=20))   # gone after 2023
+            for yr in (2022, 2023, 2024):
+                rows.append(_wk("Still Playing", yr, wk, solo=10))
+        return pd.DataFrame(rows)
+
+    def test_player_absent_from_the_latest_season_is_dropped(self):
+        b = idp.build_board(self._rows(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024])
+        assert "Retired Star" not in set(b["name"])
+        assert "Still Playing" in set(b["name"])
+
+    def test_the_filter_can_be_turned_off_for_historical_analysis(self):
+        b = idp.build_board(self._rows(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024], require_recent_season=False)
+        assert "Retired Star" in set(b["name"])
+
+    def test_a_single_season_board_is_unaffected(self):
+        rows = pd.DataFrame([_wk("Solo", 2025, wk, solo=10) for wk in range(1, 18)])
+        assert "Solo" in set(idp.build_board(rows, {"tackles_solo": 1.0},
+                                             seasons=[2025])["name"])
+
+
+class TestIdpOptionGating:
+    """When the defender option should and should not appear.
+
+    Shown next to the ranked recommendations rather than inside them: the
+    offence ranking weighs value against the chance a player survives to your
+    next pick, and defenders have no reliable draft market to estimate survival
+    from (published IDP consensus correlated 0.30 with actual pick). Ranking
+    them together would imply a comparability that does not exist.
+    """
+
+    def _league(self, idp_slots, filled):
+        from ffdraft.config import LeagueSettings
+        lg = LeagueSettings(teams=10, starters={
+            "QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1,
+            "K": 1, "DST": 1, "IDP": idp_slots})
+        return lg, ({"IDP": filled} if filled else {})
+
+    def test_no_option_when_the_league_has_no_idp_slot(self):
+        from ffdraft import server
+        lg, roster = self._league(0, 0)
+        assert server._idp_option(lg, roster, 85) is None
+
+    def test_no_option_once_the_slot_is_filled(self):
+        from ffdraft import server
+        lg, roster = self._league(1, 1)
+        assert server._idp_option(lg, roster, 85) is None
+
+    def test_unfilled_slot_without_a_league_id_says_what_is_needed(self):
+        from ffdraft import server
+        lg, roster = self._league(1, 0)
+        out = server._idp_option(lg, roster, 85)
+        assert out and out["use"] == "idp_report"
+
+    def test_multiple_slots_still_open_after_one_is_filled(self):
+        from ffdraft import server
+        lg, roster = self._league(2, 1)
+        assert server._idp_option(lg, roster, 85) is not None

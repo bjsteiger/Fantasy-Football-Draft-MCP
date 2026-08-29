@@ -160,6 +160,85 @@ def _idp_pointer(*, name: str | None = None, position: str | None = None) -> dic
                     "why": "Defensive players are projected separately -- none of the "
                            "offence model's inputs mean anything for a defender."}
     return None
+def _roster_with_idp(state, b: pd.DataFrame, league: LeagueSettings) -> dict:
+    """Your roster counts, including defenders the offence board cannot see.
+
+    DraftState.my_roster resolves each pick against the offence board and skips
+    what it cannot find, so a drafted linebacker leaves no trace. Shared by
+    draft_status and the recommendation path so they cannot disagree about
+    whether your IDP slot is filled -- which they did before this existed.
+    """
+    counts = dict(state.my_roster(b))
+    if not int(league.starters.get("IDP", 0) or 0):
+        return counts
+    from . import idp as idp_mod
+    try:
+        defenders = idp_mod.defender_names(sources.weekly_stats([CURRENT_SEASON - 1]))
+    except Exception:
+        return counts
+    resolved = set(b["_key"]) if "_key" in b.columns else set()
+    for p in (pk for pk in state.picks if pk["slot"] == state.my_slot):
+        if bd.norm_name(p["name"]) not in resolved and p["name"] in defenders:
+            counts["IDP"] = counts.get("IDP", 0) + 1
+    return counts
+
+
+def _idp_option(league: LeagueSettings, roster: dict, current_pick: int,
+                league_id: str | None = None) -> dict | None:
+    """The best defender still worth taking, when the IDP slot is still open.
+
+    Reported alongside the ranked recommendations rather than inside them, and
+    that is a deliberate limit rather than laziness. The offence recommendations
+    are ranked by opportunity cost -- value weighed against the chance a player
+    survives to your next pick -- and survival needs a draft market. Defenders
+    do not have one: published IDP consensus correlated 0.30 with actual pick in
+    a real league, so there is no honest survival probability to compute. Slotting
+    a defender into that ranked list would imply a comparability that does not
+    exist.
+
+    What can be compared is value over replacement, because a weekly score sums
+    starters wherever they line up. So the defender is shown with his VOR next to
+    the offensive alternatives, and the reader makes the call with both in view --
+    which is the whole point of not making them run a second tool.
+    """
+    if not int(league.starters.get("IDP", 0) or 0):
+        return None
+    if int(roster.get("IDP", 0) or 0) >= int(league.starters.get("IDP", 0) or 0):
+        return None  # slot already filled
+    if not league_id:
+        return {"note": "This league starts a defensive player and the slot is "
+                        "still open. Pass league_id to rank defenders -- scoring "
+                        "differs too much between leagues to assume.",
+                "use": "idp_report"}
+    try:
+        from . import idp as idp_mod
+        items = bd.espn_scoring_items(league_id, CURRENT_SEASON - 1)
+        scoring = idp_mod.scoring_from_espn(items)
+        if not scoring:
+            return None
+        seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
+        board = idp_mod.build_board(sources.weekly_stats(seasons), scoring,
+                                    seasons=seasons, teams=league.teams,
+                                    idp_slots=int(league.starters.get("IDP", 1) or 1))
+        if board.empty:
+            return None
+        top = board.iloc[0]
+        return {
+            "best_available": top["name"],
+            "position": top.get("position"),
+            "vor": float(top["vor"]),
+            "proj_points": float(top["proj_points"]),
+            "seasons_of_evidence": int(top.get("seasons_used", 1) or 1),
+            "round": (current_pick - 1) // league.teams + 1,
+            "how_to_read": "vor is directly comparable with the offensive "
+                           "recommendations above -- a weekly score sums starters "
+                           "regardless of position. There is no survival estimate "
+                           "for defenders because they have no reliable draft "
+                           "market, so this is not ranked against them.",
+            "detail": "idp_report",
+        }
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------- tools
@@ -316,7 +395,7 @@ def best_available(position: str | None = None, limit: int = 15,
 
 
 @mcp.tool()
-def who_should_i_pick(limit: int = 6) -> str:
+def who_should_i_pick(limit: int = 6, league_id: str | None = None) -> str:
     """The live draft-analyst call: who to take right now, and why.
 
     Weighs projected value, week-to-week consistency, your roster's open starting
@@ -333,7 +412,7 @@ def who_should_i_pick(limit: int = 6) -> str:
         current = on_clock
     after = state.pick_after_next() if nxt == current else nxt
 
-    roster = state.my_roster(b)
+    roster = _roster_with_idp(state, b, league)
     recs = model.recommend(b, league, current_pick=current, next_pick=after,
                            roster=roster, top_n=limit)
 
@@ -354,6 +433,7 @@ def who_should_i_pick(limit: int = 6) -> str:
         "picks_you_wait": (after - current) if after else None,
         "your_roster": roster,
         "recommendations": picks,
+        "idp_option": _idp_option(league, roster, current, league_id),
         "headline": (f"Take {picks[0]['player']} — {picks[0]['why']}" if picks else "Board empty"),
     }, indent=2)
 
@@ -436,21 +516,8 @@ def draft_status() -> str:
             "position": (r["position"] if r is not None else None),
             "proj_points": (round(float(r["proj_points"]), 1) if r is not None else None),
         })
-    counts = dict(state.my_roster(b))
     league, _ = _settings()
-    # A defender is absent from the offence board, so my_roster silently drops
-    # him and the IDP slot looks empty when it is filled. Classify the picks it
-    # could not resolve rather than leaving the roster quietly wrong.
-    if int(league.starters.get("IDP", 0) or 0):
-        from . import idp as idp_mod
-        try:
-            defenders = idp_mod.defender_names(sources.weekly_stats([CURRENT_SEASON - 1]))
-        except Exception:
-            defenders = set()
-        resolved = set(b["_key"]) if "_key" in b.columns else set()
-        for p in mine:
-            if bd.norm_name(p["name"]) not in resolved and p["name"] in defenders:
-                counts["IDP"] = counts.get("IDP", 0) + 1
+    counts = _roster_with_idp(state, b, league)
     return json.dumps({**state.summary(), "my_team": detail,
                        "roster_counts": counts,
                        "roster_needs": _roster_needs(league, counts)}, indent=2)
@@ -616,7 +683,10 @@ def on_the_clock(platform: str, league_id: str | None = None, draft_id: str | No
         return json.dumps({"step": "sync_draft", **sync}, indent=2)
 
     status = json.loads(draft_status())
-    rec = json.loads(who_should_i_pick(limit=limit))
+    # Pass league_id through so an open IDP slot surfaces here too. on_the_clock
+    # is the call made under a 90-second pick clock -- if the defender option
+    # only appeared in a separate tool, it would not be seen in time to matter.
+    rec = json.loads(who_should_i_pick(limit=limit, league_id=league_id))
 
     league, _ = _settings()
     rnd = rec.get("round", 1)
@@ -933,12 +1003,17 @@ def resolve_names(names_csv: str) -> str:
 
 
 @mcp.tool()
-def prewarm(verbose: bool = True) -> str:
+def prewarm(verbose: bool = True, league_id: str | None = None) -> str:
     """Build every cache before draft day so nothing computes while you're on the clock.
 
     The first query of a session pays for downloading and modelling five seasons.
     Every query after it is served from memory. Run this an hour before your draft,
     not during it.
+
+    In a league with an IDP slot, pass league_id to build the defender board too.
+    It is skipped otherwise, because ranking defenders needs your league's own
+    scoring and there is no safe default -- tackles alone range from 0.5 to 2
+    points between leagues.
     """
     import time as _time
 
@@ -954,6 +1029,23 @@ def prewarm(verbose: bool = True) -> str:
         ("oline", lambda: features.oline_ratings()),
         ("pace", lambda: features.team_pace_and_split()),
     ]
+    # The defender board is a separate build and was not covered here, so the
+    # first idp_report of a live draft paid full cost -- with 90 seconds on the
+    # clock, exactly what prewarm exists to prevent.
+    league_for_idp, _ = _settings()
+    if league_id and int(league_for_idp.starters.get("IDP", 0) or 0):
+        def _idp_board():
+            from . import idp as idp_mod
+            items = bd.espn_scoring_items(league_id, CURRENT_SEASON - 1)
+            scoring = idp_mod.scoring_from_espn(items)
+            if not scoring:
+                return None
+            seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
+            return idp_mod.build_board(
+                sources.weekly_stats(seasons), scoring, seasons=seasons,
+                teams=league_for_idp.teams,
+                idp_slots=int(league_for_idp.starters.get("IDP", 1) or 1))
+        steps.append(("idp_board", _idp_board))
     for name, fn in steps:
         s = _time.time()
         try:
