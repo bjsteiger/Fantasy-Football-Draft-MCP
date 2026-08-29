@@ -31,6 +31,9 @@ Manage multiple leagues. Switching is instant — boards are cached per format.
 Build every cache. **Run before draft day.** The first query otherwise pays ~8 seconds,
 or minutes on a genuinely cold cache.
 
+Pass `league_id` in an IDP league to build the defender board too — it needs your
+league's own scoring, so there is no safe default and it is skipped without one.
+
 ### `refresh_data`
 Rebuild from source. `force_download=true` re-downloads everything; use when nflverse
 publishes new data mid-season.
