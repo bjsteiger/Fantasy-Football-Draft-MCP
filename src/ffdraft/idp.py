@@ -376,20 +376,29 @@ def defender_names(weekly: pd.DataFrame) -> set[str]:
     return set(d["player_display_name"].dropna().unique())
 
 
-def roster_needs(starters: dict, filled: dict) -> dict:
+def roster_needs(starters: dict, filled: dict,
+                 flex_eligible: tuple = ("RB", "WR", "TE")) -> dict:
     """Required versus filled per starting slot, including the IDP slot.
 
-    FLEX is reported but not treated as a shortfall of any one position -- it is
-    filled by whichever eligible position ends up spare, so counting it against
-    RB or WR individually would invent a need that is not there.
+    FLEX is filled by spare eligible players rather than by anyone whose position
+    is literally "FLEX", so counting it the way every other slot is counted meant
+    it could never fill: no player ever carries that position, so `filled` was
+    always zero. A roster with six running backs and two required still reported
+    an empty flex and would have nagged for a slot filled in the third round.
+
+    Surplus is counted across the eligible positions and applied to flex, which
+    is what a lineup actually does with it.
     """
+    counts = dict(filled or {})
     out = {}
+    surplus = sum(max(0, int(counts.get(p, 0) or 0) - int((starters or {}).get(p, 0) or 0))
+                  for p in flex_eligible)
     for slot, need in (starters or {}).items():
         need = int(need or 0)
         if need <= 0:
             continue
-        have = int((filled or {}).get(slot, 0) or 0)
-        out[slot] = {"required": need, "filled": have,
+        have = surplus if slot == "FLEX" else int(counts.get(slot, 0) or 0)
+        out[slot] = {"required": need, "filled": min(have, need) if slot == "FLEX" else have,
                      "still_needed": max(0, need - have)}
     return out
 

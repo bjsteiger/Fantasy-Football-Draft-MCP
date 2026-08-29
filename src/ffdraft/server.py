@@ -126,7 +126,8 @@ def _rows(df: pd.DataFrame, cols: list[str], n: int) -> list[dict]:
 
 def _roster_needs(league: LeagueSettings, counts: dict) -> dict:
     from . import idp as idp_mod
-    return idp_mod.roster_needs(league.starters, counts)
+    return idp_mod.roster_needs(league.starters, counts,
+                                flex_eligible=league.flex_eligible)
 
 
 
