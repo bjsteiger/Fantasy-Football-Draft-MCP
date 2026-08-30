@@ -140,20 +140,40 @@ configure_league(
 )
 ```
 
-| Argument | Default | Notes |
+| Argument | New league | Notes |
 |---|---|---|
-| `name` | `"default"` | Any label. Reusing a name updates that league in place. |
+| `name` | `"default"` | Any label. Same name = change that league. |
 | `teams` | 12 | Any size. |
-| `draft_slot` | 6 | Your 1-indexed pick in round 1. Validated against `teams`. |
+| `draft_slot` | 6 | Your pick in round 1, counting from 1. Must fit inside `teams`. |
 | `rounds` | 16 | |
 | `scoring` | `"half_ppr"` | `ppr` / `full_ppr`, `half_ppr`, `standard` / `non_ppr`. |
 | `snake` | `true` | `false` for a linear (non-snake) draft. |
-| `qb`, `rb`, `wr`, `te`, `flex` | 1 / 2 / 2 / 1 / 1 | Starting roster slots. K and DST are fixed at 1 each and not modelled. |
-| `idp` | 0 | Individual defensive player slots — LB, DL, DB, edge, or a generic defensive flex. Set it if your league starts defenders; rank them with `idp_report`. |
-| `superflex` | 0 | Extra slots where a QB may also start. Shifts replacement level and roster-need logic — quarterbacks become genuinely scarce. |
-| `te_premium_bonus` | 0.0 | Extra fantasy points per TE reception, on top of `scoring`. |
-| `consistency_weight` | 0.35 for a new league, unchanged for an existing one | 0 = pure expected points (upside), 1 = pure week-to-week reliability (floor). Omitting it leaves the league's current value alone; the other model weights (`schedule`, `injury`, `oline`, `td_luck`, `qb_boost`…) are always preserved, so reconfiguring a league to change `idp` or `rounds` does not undo tuning done with `model_settings`. |
+| `qb`, `rb`, `wr`, `te`, `flex` | 1 / 2 / 2 / 1 / 1 | Starting roster slots. K and DST are 1 each and are not projected. |
+| `idp` | 0 | Defensive player slots — LB, DL, DB, edge, or a generic defensive slot. Set it if your league starts defenders, then rank them with `idp_report`. |
+| `superflex` | 0 | Extra slots where a QB may start. Makes quarterbacks scarce, which moves replacement level and roster need. |
+| `te_premium_bonus` | 0.0 | Extra points per TE catch, on top of `scoring`. |
+| `consistency_weight` | 0.35 | 0 = pure upside, 1 = pure week-to-week floor. Your other weights (`schedule`, `injury`, `oline`, `td_luck`, `qb_boost`…) are never touched here — tune those with `model_settings`. |
 | `adp_csv_path` | — | Path to your platform's ADP export, if you want it instead of consensus ECR. |
+
+### Changing a league later
+
+Use the same name and pass only what you want to change. Everything else stays as
+it is:
+
+```
+Add a defensive slot to my home league.
+```
+
+```python
+configure_league(name="home", idp=1)
+```
+
+That league is still 10 teams, full PPR, pick 4. Nothing you set earlier is lost,
+and your model weights are untouched. The response lists every setting the league
+ended up with, plus whether it made a new league or changed an existing one — read
+it once to be sure the right league got the change.
+
+The "New league" column above is what you get when the name is new.
 
 You can hold as many leagues as you like side by side:
 
@@ -267,9 +287,9 @@ A typical `who_should_i_pick` answer:
 ### Setup & league management
 
 **`configure_league(name, teams, draft_slot, rounds, scoring, snake, qb, rb, wr, te, flex, idp, superflex, te_premium_bonus, consistency_weight, adp_csv_path)`**
-Create or update a named league; makes it active. See the table in §5. Updating an
-existing league keeps its model weights — including `consistency_weight` when you
-don't pass one — so changing the league's shape never resets tuning.
+Set up a league or change one you have; makes it active. Only what you pass is
+changed — everything else keeps its current value, model weights included. See the
+table in §5.
 
 **`list_leagues()`**
 Every league you've set up, which is active, teams/scoring/slot/superflex, and how

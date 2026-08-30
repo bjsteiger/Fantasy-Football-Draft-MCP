@@ -6,6 +6,29 @@ All notable changes to this project. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+**`configure_league` changes only what you pass it** ([#37](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/37))
+- Every league setting was rebuilt from parameter defaults on each call, so a
+  call that named one thing reset everything else. On the real league,
+  `configure_league(name="rudy_was_offsides", idp=1)` turned a 10-team full-PPR
+  league with pick 5 into a 12-team half-PPR league with pick 6 — which moves
+  replacement levels, the pick list, and the board cache key. Same trap as #32,
+  which covered the model weights; this is the league's own shape.
+- Settings are now merged into what the league already has. Anything you leave
+  out keeps its current value, so `configure_league(name="home", idp=1)` changes
+  the defensive slot and nothing else. A name that has never been used still
+  starts from the documented defaults, so creating a league is unchanged.
+- `draft_slot` is validated against the team count the league ends up with
+  rather than the one that happened to be passed, so shrinking a 14-team league
+  to 10 while your slot is 12 is refused instead of saved.
+- `K` and `DST` counts come from the stored roster too. They are not parameters,
+  so hardcoding them would have rewritten a league set up another way.
+- The response now repeats the whole league — roster slots, weights, picks,
+  replacement levels — and says whether it created a new league or updated an
+  existing one. Merging means a short call can inherit settings from months ago,
+  so the output has to show what the league actually is, not what you typed.
+
 ## [1.2.0] — 2026-08-30
 
 ### Changed

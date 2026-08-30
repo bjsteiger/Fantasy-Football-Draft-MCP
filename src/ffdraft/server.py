@@ -349,50 +349,82 @@ def _idp_plan(league: LeagueSettings, league_id: str | None) -> dict | None:
 # ---------------------------------------------------------------- tools
 
 @mcp.tool()
-def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6,
-                     rounds: int = 16, scoring: str = "half_ppr", snake: bool = True,
-                     qb: int = 1, rb: int = 2, wr: int = 2, te: int = 1, flex: int = 1,
-                     idp: int = 0, superflex: int = 0, te_premium_bonus: float = 0.0,
+def configure_league(name: str = "default", teams: int | None = None,
+                     draft_slot: int | None = None, rounds: int | None = None,
+                     scoring: str | None = None, snake: bool | None = None,
+                     qb: int | None = None, rb: int | None = None,
+                     wr: int | None = None, te: int | None = None,
+                     flex: int | None = None, idp: int | None = None,
+                     superflex: int | None = None,
+                     te_premium_bonus: float | None = None,
                      consistency_weight: float | None = None,
                      adp_csv_path: str | None = None) -> str:
-    """Create or update a league, and make it the active one.
+    """Set up a league, or change one you already have. Makes it the active league.
 
-    Give each league a name and you can keep as many as you like side by side —
-    a 10-team full PPR and a 13-team half PPR hold separate boards, separate
-    replacement levels and separate in-progress drafts.
+    Only the settings you pass are changed. Anything you leave out keeps the
+    value it already had, so you can change one thing without retyping the rest:
+    configure_league(name="home", idp=1) changes the defensive slot and touches
+    nothing else. A brand-new name starts from the defaults below.
 
-    scoring: ppr, half_ppr, or standard. Use superflex=1 for a second QB-eligible
-    slot, and te_premium_bonus for extra points per tight end reception.
-    consistency_weight trades expected points against week-to-week reliability
-    (0 = pure upside, 1 = pure floor). Leave it out and an existing league keeps
-    whatever it is already tuned to; every other model weight is preserved
-    either way, so reconfiguring the league's shape never silently undoes
-    tuning done through model_settings.
+    New-league defaults: 12 teams, 16 rounds, pick 6, half PPR, snake, and
+    1 QB / 2 RB / 2 WR / 1 TE / 1 FLEX / 1 K / 1 DST / 0 IDP.
 
-    idp is how many individual defensive player slots the league starts (a
-    linebacker, defensive back, edge rusher, or a generic defensive-player
-    flex). Defensive players are not projected by this tool, so the count is
-    used only to keep round arithmetic honest -- those rounds are excluded from
-    simulations rather than filled with a recommendation the model cannot make.
+    scoring: ppr, half_ppr, or standard. superflex=1 adds a slot where a second
+    quarterback may start. te_premium_bonus adds points per tight end catch.
+    consistency_weight trades upside against week-to-week reliability (0 = pure
+    upside, 1 = pure floor). Your other model weights are never touched here --
+    tune those with model_settings.
+
+    idp is how many individual defensive players you start (a linebacker,
+    defensive back, edge rusher, or a generic defensive slot). This tool does
+    not project defenders, so the count is used to keep the round math right --
+    those rounds are left out of simulations instead of being filled with a
+    recommendation the model cannot make. Rank defenders with idp_report.
+
+    The response echoes every setting the league ended up with, so you can see
+    what was kept and what changed.
     """
+    # Every setting is merged into what the league already has rather than
+    # rebuilt from parameter defaults. Rebuilding meant a call that named one
+    # setting reset all the others: configure_league(name="x", idp=1) on a
+    # 10-team full-PPR league silently made it a 12-team half-PPR league, which
+    # moves replacement levels, the pick list and the board cache key. Same
+    # trap as issue #32, which covered the model weights; this is issue #37 for
+    # the league's own shape. An unknown name loads defaults, so creating a
+    # league behaves exactly as before.
+    known, _ = cfg_list_leagues()
+    existed = name in known
+    stored, weights = load_settings(name)
+
+    def pick(passed, current):
+        return current if passed is None else passed
+
+    teams = int(pick(teams, stored.teams))
+    draft_slot = int(pick(draft_slot, stored.draft_slot))
+    rounds = int(pick(rounds, stored.rounds))
+    snake = bool(pick(snake, stored.snake))
+    superflex = int(pick(superflex, stored.superflex))
+    te_premium_bonus = float(pick(te_premium_bonus, stored.te_premium_bonus))
+    # Validated against the team count the league actually ends up with, not
+    # the one that happened to be passed -- dropping to a 10-team league without
+    # moving a slot-12 pick has to fail here rather than later.
     if not 1 <= draft_slot <= teams:
         return json.dumps({"error": f"draft_slot {draft_slot} is outside a {teams}-team league"})
 
-    starters = {"QB": qb, "RB": rb, "WR": wr, "TE": te, "FLEX": flex,
-                "K": 1, "DST": 1, "IDP": idp}
+    # K and DST come from the stored roster too. They are not parameters, so
+    # hardcoding them here would have quietly rewritten a league that had been
+    # set up with different counts some other way.
+    starters = dict(stored.starters)
+    for slot, passed in (("QB", qb), ("RB", rb), ("WR", wr), ("TE", te),
+                         ("FLEX", flex), ("IDP", idp)):
+        if passed is not None:
+            starters[slot] = int(passed)
+
     league = LeagueSettings(
         name=name, teams=teams, rounds=rounds, draft_slot=draft_slot, snake=snake,
-        scoring=Scoring.preset(scoring), starters=starters,
-        superflex=superflex, te_premium_bonus=te_premium_bonus,
+        scoring=stored.scoring if scoring is None else Scoring.preset(scoring),
+        starters=starters, superflex=superflex, te_premium_bonus=te_premium_bonus,
     )
-    # Start from the weights this league already has rather than a fresh
-    # ModelWeights. Building a new one reset every weight the dataclass defaults
-    # -- schedule, injury, oline, td_luck, qb_boost -- back to its default on
-    # every call, so reconfiguring a league just to change `idp` or `rounds`
-    # silently threw away tuning done through model_settings, with nothing in
-    # the response to say so. An unknown name still loads defaults, so a new
-    # league is unaffected. See issue #32.
-    _, weights = load_settings(name)
     if consistency_weight is not None:
         weights.consistency_weight = float(consistency_weight)
     save_settings(league, weights)
@@ -405,15 +437,21 @@ def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6
     known, _ = cfg_list_leagues()
     reused = _board_path(league, weights).exists()
     return json.dumps({
-        "league": name, "active": True, "teams": teams, "your_slot": draft_slot,
-        "scoring": scoring, "superflex": superflex,
+        "league": name,
+        # Says plainly whether settings were inherited or started fresh.
+        "status": "updated existing league" if existed else "created new league",
+        "active": True, "teams": teams, "your_slot": draft_slot,
+        "rounds": rounds, "snake": snake,
+        "scoring": _scoring_label(league), "superflex": superflex,
+        "te_premium_bonus": te_premium_bonus,
+        # The full roster and weights, every time. Merging settings means a
+        # short call can inherit values you set months ago, so the response has
+        # to show what the league actually is rather than what you just typed.
+        "starters": starters,
+        "weights": asdict(weights),
         "your_picks": league.picks_for_slot()[:rounds],
         "replacement_levels": league.replacement_ranks(),
         "all_leagues": known,
-        # Echoed so a reconfigure shows what the model is actually tuned to.
-        # The reset in issue #32 was invisible partly because this response
-        # never mentioned weights at all.
-        "weights": asdict(weights),
         "board": "already cached for these settings" if reused
                  else "will build on your next query",
     }, indent=2)
