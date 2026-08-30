@@ -237,6 +237,10 @@ of a session can pay for a multi-minute network download if a cache entry expire
 (see `max_age_days` behavior under Tool reference → `refresh_data`); every query
 after `prewarm` is served from memory.
 
+In an IDP league, add your league id: `Run prewarm for league 1431833696.` That
+reads your defensive scoring from ESPN now and builds the defender board now, so
+neither happens while you are on the clock.
+
 ---
 
 ## 7. During the draft
@@ -307,7 +311,9 @@ leagues sharing the same format may still need it.
 Build every cache before draft day (§6). `verbose=false` suppresses the
 per-step timing breakdown. In an IDP league pass `league_id` to build the
 defender board too — it's skipped without one, since ranking defenders needs
-your league's own scoring and there is no safe default.
+your league's own scoring and there is no safe default. Your league's defensive
+scoring is read from ESPN once here and kept, so picks during the draft are
+answered without touching the network.
 
 **`refresh_data(force_download=False)`**
 Rebuild the board from source data. `force_download=true` deletes every cached

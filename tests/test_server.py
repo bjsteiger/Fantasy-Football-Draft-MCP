@@ -414,3 +414,116 @@ class TestSyncDraftFailures:
         out = json.loads(server.sync_draft(platform="sleeper", draft_id="abc"))
 
         assert "sleeper is down" in out["error"]
+
+
+class TestIdpCaches:
+    """prewarm has to actually warm something (issue #44).
+
+    The IDP step built a board and dropped it: `build_board` has no cache and
+    `espn_scoring_items` is a plain requests.get, so every who_should_i_pick,
+    plan_my_draft and idp_report re-read ESPN over the network and rebuilt the
+    defender board from five seasons. Measured at ~0.15s of live ESPN plus
+    ~0.15s of rebuild on every pick, with a network dependency and a silent
+    failure mode attached to each one.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clean(self, monkeypatch):
+        monkeypatch.setattr(server, "_IDP_SCORING", {})
+        monkeypatch.setattr(server, "_IDP_BOARDS", {})
+
+    @pytest.fixture
+    def espn(self, monkeypatch):
+        calls = []
+
+        def fake_items(league_id, season):
+            calls.append((league_id, season))
+            return [{"statId": 109, "points": 1.0}]
+        monkeypatch.setattr(bd, "espn_scoring_items", fake_items)
+        return calls
+
+    @pytest.fixture
+    def built(self, monkeypatch):
+        builds = []
+
+        def fake_build(weekly, scoring, **kw):
+            builds.append(kw)
+            return pd.DataFrame([{"name": "Fred Warner", "position": "LB", "vor": 20.0,
+                                  "proj_points": 300.0, "seasons_used": 4, "pos_rank": 1}])
+        from ffdraft import idp as idp_mod
+        monkeypatch.setattr(idp_mod, "build_board", fake_build)
+        monkeypatch.setattr(sources, "weekly_stats", lambda seasons: pd.DataFrame())
+        return builds
+
+    def test_scoring_is_read_from_espn_once(self, espn):
+        for _ in range(3):
+            server._idp_scoring("12345")
+        assert len(espn) == 1
+
+    def test_a_different_season_is_read_separately(self, espn):
+        server._idp_scoring("12345", 2024)
+        server._idp_scoring("12345", 2025)
+        assert len(espn) == 2
+
+    def test_a_failed_read_is_not_cached(self, monkeypatch):
+        # Otherwise one blip during a draft means every later call is answered
+        # from a cached failure, and retrying cannot help.
+        calls = []
+
+        def flaky(league_id, season):
+            calls.append(season)
+            if len(calls) == 1:
+                raise bd.EspnError("ESPN returned 503", status=503)
+            return [{"statId": 109, "points": 1.0}]
+        monkeypatch.setattr(bd, "espn_scoring_items", flaky)
+
+        with pytest.raises(bd.EspnError):
+            server._idp_scoring("12345")
+        assert server._idp_scoring("12345") == {"tackles_total": 1.0}
+
+    def test_the_board_is_built_once(self, espn, built):
+        league = LeagueSettings(teams=10, starters={**LeagueSettings().starters, "IDP": 1})
+        for _ in range(3):
+            server._idp_board(league, "12345")
+        assert len(built) == 1
+
+    @pytest.mark.parametrize("second", [
+        {"teams": 12},
+        {"starters": {**LeagueSettings().starters, "IDP": 2}},
+    ])
+    def test_a_league_that_changed_shape_builds_its_own_board(self, espn, built, second):
+        base = {"teams": 10, "starters": {**LeagueSettings().starters, "IDP": 1}}
+        server._idp_board(LeagueSettings(**base), "12345")
+        server._idp_board(LeagueSettings(**{**base, **second}), "12345")
+        assert len(built) == 2
+
+    def test_a_different_league_builds_its_own_board(self, espn, built):
+        league = LeagueSettings(teams=10, starters={**LeagueSettings().starters, "IDP": 1})
+        server._idp_board(league, "12345")
+        server._idp_board(league, "99999")
+        assert len(built) == 2
+
+    def test_a_different_games_floor_builds_its_own_board(self, espn, built):
+        league = LeagueSettings(teams=10, starters={**LeagueSettings().starters, "IDP": 1})
+        server._idp_board(league, "12345", min_games=8)
+        server._idp_board(league, "12345", min_games=4)
+        assert len(built) == 2
+
+    def test_a_league_with_no_defensive_scoring_gets_an_empty_board(self, monkeypatch):
+        monkeypatch.setattr(bd, "espn_scoring_items", lambda league_id, season: [])
+        league = LeagueSettings(teams=10)
+        assert server._idp_board(league, "12345").empty
+
+    def test_a_failed_board_is_reported_not_silently_dropped(self, monkeypatch):
+        # Returning None made a broken ESPN read look exactly like "no defender
+        # is worth taking here", which on the clock is the wrong thing to believe.
+        def boom(*a, **kw):
+            raise bd.EspnError("ESPN returned 401", status=401)
+        monkeypatch.setattr(server, "_idp_board", boom)
+        league = LeagueSettings(teams=10, starters={**LeagueSettings().starters, "IDP": 1})
+
+        out = server._idp_option(league, {"IDP": 0}, current_pick=85, league_id="12345")
+
+        assert out is not None
+        assert "401" in out["detail"]
+        assert out["use"] == "idp_report"

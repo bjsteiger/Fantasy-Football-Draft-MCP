@@ -43,6 +43,15 @@ _CACHE: dict[str, Any] = {"league": None, "weights": None, "adp_csv": {}}
 # league and a 13-team half-PPR league each keep their own and switching between
 # them is instant rather than an eight-second rebuild.
 _BOARDS: dict[str, pd.DataFrame] = {}
+# Defensive scoring read from ESPN, and the defender boards built from it. Both
+# were rebuilt on every call: build_board has no cache of its own and
+# espn_scoring_items is a plain requests.get, so prewarm's IDP step warmed
+# nothing and every on-the-clock call re-hit the network. Measured at 0.15s of
+# live ESPN plus 0.16s of rebuild per call -- small, but it put a network
+# dependency on every pick, and a transient failure there deletes the defender
+# recommendation silently. See issue #44.
+_IDP_SCORING: dict[tuple[str, int], dict[str, float]] = {}
+_IDP_BOARDS: dict[tuple, pd.DataFrame] = {}
 
 
 def _scoring_label(league: LeagueSettings) -> str:
@@ -243,6 +252,60 @@ def _roster_with_idp(state, b: pd.DataFrame, league: LeagueSettings) -> dict:
     return counts
 
 
+def _idp_seasons(season: int | None = None) -> list[int]:
+    """The lookback window a defender board is built from.
+
+    One definition, used by every caller. Three call sites each built this list
+    themselves, which is how idp_report once ended up reading a single season
+    while who_should_i_pick read five and the two disagreed about who the best
+    defender was.
+    """
+    seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
+    if season is not None and int(season) not in seasons:
+        return [int(season)]
+    return seasons
+
+
+def _idp_scoring(league_id: str, season: int | None = None) -> dict[str, float]:
+    """This league's defensive scoring, read from ESPN once per process.
+
+    Cached because it is read on every on-the-clock call and never changes
+    during a draft. A failed read is not cached, so a retry actually retries.
+    """
+    from . import idp as idp_mod
+    season = int(season if season is not None else CURRENT_SEASON - 1)
+    key = (str(league_id), season)
+    if key not in _IDP_SCORING:
+        _IDP_SCORING[key] = idp_mod.scoring_from_espn(
+            bd.espn_scoring_items(league_id, season))
+    return _IDP_SCORING[key]
+
+
+def _idp_board(league: LeagueSettings, league_id: str, season: int | None = None,
+               min_games: int | None = None) -> pd.DataFrame:
+    """The defender board for this league, built once and kept.
+
+    Keyed on everything that changes it -- league id, which season's scoring
+    rules, team count, defensive slots, the games floor and the lookback window
+    -- so a different league or a reconfigured one builds its own rather than
+    being served this one.
+    """
+    from . import idp as idp_mod
+    scoring = _idp_scoring(league_id, season)
+    if not scoring:
+        return idp_mod.build_board(pd.DataFrame(), {})   # empty board, no scoring
+    seasons = _idp_seasons(season)
+    idp_slots = int(league.starters.get("IDP", 1) or 1)
+    games = int(min_games if min_games is not None else idp_mod.MIN_GAMES)
+    key = (str(league_id), int(season) if season is not None else None,
+           league.teams, idp_slots, games, tuple(seasons))
+    if key not in _IDP_BOARDS:
+        _IDP_BOARDS[key] = idp_mod.build_board(
+            sources.weekly_stats(seasons), scoring, seasons=seasons,
+            teams=league.teams, idp_slots=idp_slots, min_games=games)
+    return _IDP_BOARDS[key]
+
+
 def _idp_option(league: LeagueSettings, roster: dict, current_pick: int,
                 league_id: str | None = None) -> dict | None:
     """The best defender still worth taking, when the IDP slot is still open.
@@ -271,15 +334,7 @@ def _idp_option(league: LeagueSettings, roster: dict, current_pick: int,
                         "differs too much between leagues to assume.",
                 "use": "idp_report"}
     try:
-        from . import idp as idp_mod
-        items = bd.espn_scoring_items(league_id, CURRENT_SEASON - 1)
-        scoring = idp_mod.scoring_from_espn(items)
-        if not scoring:
-            return None
-        seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
-        board = idp_mod.build_board(sources.weekly_stats(seasons), scoring,
-                                    seasons=seasons, teams=league.teams,
-                                    idp_slots=int(league.starters.get("IDP", 1) or 1))
+        board = _idp_board(league, league_id)
         if board.empty:
             return None
         top = board.iloc[0]
@@ -297,9 +352,13 @@ def _idp_option(league: LeagueSettings, roster: dict, current_pick: int,
                            "market, so this is not ranked against them.",
             "detail": "idp_report",
         }
-    except Exception:
-        return None
-
+    except Exception as exc:
+        # Answered, not swallowed. Returning None here made a failed ESPN read
+        # look exactly like "no defender worth taking", which on the clock is
+        # the wrong thing to believe. See issue #44.
+        return {"note": "Could not rank defenders for this pick.",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "use": "idp_report"}
 
 
 def _idp_plan(league: LeagueSettings, league_id: str | None) -> dict | None:
@@ -323,15 +382,7 @@ def _idp_plan(league: LeagueSettings, league_id: str | None) -> dict | None:
                         "to see which one to target and when.",
                 "use": "idp_report"}
     try:
-        from . import idp as idp_mod
-        items = bd.espn_scoring_items(league_id, CURRENT_SEASON - 1)
-        scoring = idp_mod.scoring_from_espn(items)
-        if not scoring:
-            return None
-        seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
-        board = idp_mod.build_board(sources.weekly_stats(seasons), scoring,
-                                    seasons=seasons, teams=league.teams,
-                                    idp_slots=int(league.starters.get("IDP", 1) or 1))
+        board = _idp_board(league, league_id)
         if board.empty:
             return None
         top = board.head(3)[["name", "position", "proj_points", "vor"]].to_dict("records")
@@ -343,8 +394,11 @@ def _idp_plan(league: LeagueSettings, league_id: str | None) -> dict | None:
                     "they actually went in your league.",
             "detail": "idp_report",
         }
-    except Exception:
-        return None
+    except Exception as exc:
+        return {"note": "Could not rank defenders for this league.",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "use": "idp_report"}
+
 
 # ---------------------------------------------------------------- tools
 
@@ -518,6 +572,11 @@ def refresh_data(force_download: bool = False) -> str:
     sources.clear_memory_cache()
     features.clear_derived_cache()
     _BOARDS.clear()
+    # The defender board is built from the same weekly stats, so it is just as
+    # stale after a refresh. Scoring is re-read too, in case the league changed
+    # it -- this one is cheap and the whole point of refresh_data is starting over.
+    _IDP_BOARDS.clear()
+    _IDP_SCORING.clear()
     b = _build_board(force=True)
     league, _ = _settings()
     return json.dumps({
@@ -1220,6 +1279,10 @@ def prewarm(verbose: bool = True, league_id: str | int | None = None) -> str:
     It is skipped otherwise, because ranking defenders needs your league's own
     scoring and there is no safe default -- tackles alone range from 0.5 to 2
     points between leagues.
+
+    Passing it also reads your league's defensive scoring from ESPN now rather
+    than on every pick, so a slow or failing ESPN during the draft cannot take
+    the defender recommendation away from you.
     """
     try:
         league_id = _league_id(league_id)
@@ -1244,18 +1307,11 @@ def prewarm(verbose: bool = True, league_id: str | int | None = None) -> str:
     # clock, exactly what prewarm exists to prevent.
     league_for_idp, _ = _settings()
     if league_id and int(league_for_idp.starters.get("IDP", 0) or 0):
-        def _idp_board():
-            from . import idp as idp_mod
-            items = bd.espn_scoring_items(league_id, CURRENT_SEASON - 1)
-            scoring = idp_mod.scoring_from_espn(items)
-            if not scoring:
-                return None
-            seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
-            return idp_mod.build_board(
-                sources.weekly_stats(seasons), scoring, seasons=seasons,
-                teams=league_for_idp.teams,
-                idp_slots=int(league_for_idp.starters.get("IDP", 1) or 1))
-        steps.append(("idp_board", _idp_board))
+        # Warms the caches the draft-day calls read, which is the point: this
+        # step used to build a board and drop it, so who_should_i_pick still
+        # re-fetched ESPN and rebuilt from five seasons on every pick.
+        steps.append(("idp_scoring", lambda: _idp_scoring(league_id)))
+        steps.append(("idp_board", lambda: _idp_board(league_for_idp, league_id)))
     for name, fn in steps:
         s = _time.time()
         try:
@@ -1528,11 +1584,10 @@ def idp_report(league_id: str | int | None = None, season: int | None = None,
     season = int(season or (CURRENT_SEASON - 1))
 
     try:
-        items = bd.espn_scoring_items(league_id, season)
+        scoring = _idp_scoring(league_id, season)
     except Exception as exc:
         return json.dumps({"error": f"couldn't read league scoring: {exc}"}, indent=2)
 
-    scoring = idp_mod.scoring_from_espn(items)
     if not scoring:
         return json.dumps({
             "league_id": league_id, "season": season, "scores_idp": False,
@@ -1540,22 +1595,17 @@ def idp_report(league_id: str | int | None = None, season: int | None = None,
                     "players, so there is nothing to rank.",
         }, indent=2)
 
-    # Project across the same lookback window the recommendation path uses, not
-    # the single season this once read. Building one board from 2025 and another
-    # from 2021-25 meant the two disagreed about who the best defender was --
-    # idp_report said Blake Cashman at 89.9 value over replacement while
+    # Built through the shared helper, which projects across the same lookback
+    # window the recommendation path uses. Building one board from 2025 and
+    # another from 2021-25 meant the two disagreed about who the best defender
+    # was -- idp_report said Blake Cashman at 89.9 value over replacement while
     # who_should_i_pick and plan_my_draft said Alex Singleton at 34.0. Same
     # question, different answer depending on which tool you happened to ask.
     # `season` still selects which season's scoring rules to read, which matters:
     # this league sextupled its IDP scoring between 2024 and 2025.
-    seasons = list(range(CURRENT_SEASON - 5, CURRENT_SEASON))
-    if season not in seasons:
-        seasons = [season]
-    weekly = sources.weekly_stats(seasons)
+    seasons = _idp_seasons(season)
     idp_slots = int(league.starters.get("IDP", 0)) or 1
-    board = idp_mod.build_board(weekly, scoring, seasons=seasons,
-                                teams=league.teams, idp_slots=idp_slots,
-                                min_games=min_games)
+    board = _idp_board(league, league_id, season, min_games)
     if position:
         want = str(position).upper()
         if "position" in board.columns:
