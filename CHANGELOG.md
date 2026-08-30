@@ -6,6 +6,28 @@ All notable changes to this project. Format follows
 
 ## [Unreleased]
 
+### Fixed
+
+**`configure_league` no longer resets tuned model weights** ([#32](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/32))
+- The tool built a brand-new `ModelWeights` on every call, threading only
+  `consistency_weight` through. Every other weight — `schedule`, `injury`,
+  `oline`, `pace_volume`, `td_luck`, `qb_boost`, `separation`, `age`,
+  `divisional` — silently reverted to its dataclass default. Since the tool is
+  documented as "create **or update** a league", the natural call to change
+  `idp`, `rounds` or `draft_slot` on an existing league threw away every weight
+  tuned through `model_settings`, and the response said nothing about it.
+- Reproduced on the real league before the fix: `schedule` had been set to 0.0
+  from backtest evidence; one `configure_league(..., idp=1)` put it back to
+  0.05. After the fix the same call leaves it at 0.0.
+- `configure_league` now loads the league's existing weights and overwrites only
+  `consistency_weight`, and only when it is actually passed — the same
+  update-in-place pattern `model_settings` already uses. Its default is now
+  `None` rather than `0.35`, so omitting it keeps whatever the league is tuned
+  to instead of quietly restoring the default. A league name that has never been
+  configured still starts from defaults, so new leagues are unaffected.
+- The response now echoes `weights`. The reset was invisible partly because the
+  JSON never mentioned them.
+
 ## [1.1.0] — 2026-08-30
 
 ### Added
