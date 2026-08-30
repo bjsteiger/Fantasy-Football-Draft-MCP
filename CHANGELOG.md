@@ -6,6 +6,8 @@ All notable changes to this project. Format follows
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-08-30
+
 ### Added
 
 **Individual defensive players (IDP)**
