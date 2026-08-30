@@ -339,12 +339,13 @@ def project(tbl: pd.DataFrame, league: LeagueSettings, weights: ModelWeights) ->
     # Injury: expected games available out of 17. The risk score is a relative
     # ranking, not a literal miss probability, so it's scaled before converting.
     t["exp_games"] = (17 * (1 - t["injury_risk"] * 0.62)).clip(7, 17)
+    t["m_injury"] = 1 - (t["injury_risk"] - 0.22).clip(-0.2, 0.6) * w.injury
     if is_rook.any() and "exp_games" in tbl.columns:
         # Rookie availability comes from draft capital, not injury history they
-        # don't have yet.
+        # don't have yet. This override must come after the whole-column
+        # m_injury assignment above, which would otherwise clobber it.
         t.loc[is_rook, "exp_games"] = tbl["exp_games"][is_rook].values
         t.loc[is_rook, "m_injury"] = 1.0
-    t["m_injury"] = 1 - (t["injury_risk"] - 0.22).clip(-0.2, 0.6) * w.injury
 
     t["m_age"] = [features.age_adjustment(p, a) for p, a in zip(t["position"], t["age"])]
 
@@ -415,11 +416,13 @@ def project(tbl: pd.DataFrame, league: LeagueSettings, weights: ModelWeights) ->
     # A backup who caught two touchdowns in his only three appearances will show a
     # perfect startable rate and near-zero variance; without this he outranks
     # established starters on "reliability" he has never actually demonstrated.
-    cons_target = t["position"].map(
-        t.assign(_c=raw_consistency).groupby("position").apply(
-            lambda g: g.nlargest(40, "fp_mean")["_c"].mean(), include_groups=False
-        ).to_dict()
-    ).fillna(raw_consistency.mean())
+    # A plain loop rather than groupby.apply(include_groups=False): that keyword
+    # only exists from pandas 2.2, and this package supports pandas >= 2.0.
+    cons_by_pos = {
+        pos: grp.nlargest(40, "fp_mean")["_c"].mean()
+        for pos, grp in t.assign(_c=raw_consistency).groupby("position")
+    }
+    cons_target = t["position"].map(cons_by_pos).fillna(raw_consistency.mean())
     t["consistency"] = (raw_consistency * shrink + cons_target * (1 - shrink)).clip(0, 1)
     if is_rook.any() and "rookie_consistency" in t.columns:
         # Rookies get an explicit prior instead. They are the most volatile group in

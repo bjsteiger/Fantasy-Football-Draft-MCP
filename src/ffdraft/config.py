@@ -201,6 +201,21 @@ class ModelWeights:
     qb_boost: float = 0.0
 
 
+def board_cache_key(league: LeagueSettings, weights: ModelWeights) -> str:
+    """Identifies a built board: league settings plus the model weights baked into it.
+
+    League settings alone are not enough. Every weight changes draft_score
+    (consistency_weight and qb_boost directly, the rest through the projection),
+    and configure_league takes consistency_weight as a parameter -- keying the
+    board on settings alone meant reconfiguring that weight kept serving the
+    board built with the old one. Two leagues share a board only when both their
+    settings and their weights match.
+    """
+    w = ",".join(f"{k}={v}" for k, v in sorted(asdict(weights).items()))
+    raw = f"{league.cache_key()}|{w}"
+    return hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
 LEAGUES_PATH = STATE_DIR / "leagues.json"
 
 

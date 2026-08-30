@@ -100,6 +100,38 @@ class TestCacheKey:
         assert base.cache_key() != other.cache_key()
 
 
+class TestBoardCacheKeyIncludesWeights:
+    """A built board bakes the model weights in, so its identity must too.
+
+    configure_league takes consistency_weight as a parameter; when the key
+    ignored weights, changing that weight kept serving the board built with the
+    old one -- the same silent-staleness bug MODEL_VERSION exists to prevent.
+    """
+
+    def test_same_settings_and_weights_share_a_board(self):
+        from ffdraft.config import board_cache_key
+        lg = LeagueSettings(teams=12)
+        assert board_cache_key(lg, ModelWeights()) == board_cache_key(lg, ModelWeights())
+
+    @pytest.mark.parametrize("override", [
+        {"consistency_weight": 0.6},
+        {"qb_boost": 0.12},
+        {"td_luck": 0.0},
+        {"injury": 0.2},
+    ])
+    def test_changing_any_weight_forces_a_new_board(self, override):
+        from ffdraft.config import board_cache_key
+        lg = LeagueSettings(teams=12)
+        assert (board_cache_key(lg, ModelWeights())
+                != board_cache_key(lg, ModelWeights(**override)))
+
+    def test_league_distinctions_survive(self):
+        from ffdraft.config import board_cache_key
+        w = ModelWeights()
+        assert (board_cache_key(LeagueSettings(teams=10), w)
+                != board_cache_key(LeagueSettings(teams=12), w))
+
+
 class TestModelWeights:
     def test_defaults_are_bounded(self):
         w = ModelWeights()

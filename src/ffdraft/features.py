@@ -4,6 +4,8 @@ don't break when a website changes its HTML.
 """
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 
@@ -65,9 +67,19 @@ def _zscore(s: pd.Series) -> pd.Series:
 
 
 def _season_weights(seasons: list[int]) -> dict[int, float]:
-    """Recency weights aligned to however many seasons actually loaded."""
+    """Recency weights aligned to however many seasons actually loaded.
+
+    Alignment is newest-season-to-heaviest-weight in both directions: fewer
+    seasons than weights drops the oldest weights, more seasons than weights
+    (an FFDRAFT_SEASONS override) pads the extra oldest seasons at the oldest
+    weight. The naive zip against a shorter weight list would silently pair the
+    weights with the *oldest* seasons and leave the newest ones weighted zero --
+    exactly backwards.
+    """
     seasons = sorted(seasons)
-    w = RECENCY_WEIGHTS[-len(seasons):]
+    n = len(seasons)
+    w = RECENCY_WEIGHTS[-n:] if n <= len(RECENCY_WEIGHTS) else (
+        [RECENCY_WEIGHTS[0]] * (n - len(RECENCY_WEIGHTS)) + list(RECENCY_WEIGHTS))
     total = sum(w)
     return {s: wi / total for s, wi in zip(seasons, w)}
 
@@ -354,8 +366,27 @@ def _player_redzone_role(pbp: pd.DataFrame) -> pd.DataFrame:
     return out[["season", "player_id", "rz_touches", "rz_td"]]
 
 
+def _defense_signature(defense: pd.DataFrame) -> str:
+    """Content signature of the columns strength_of_schedule actually reads.
+
+    Keying on len(defense) alone was wrong the same way keying on id() was in
+    defense_ratings: the row count is one per season-team pair regardless of
+    scoring, so a PPR league and a standard league produce frames of identical
+    length carrying different fpa_* values. The first league to ask therefore
+    poisoned the cache for every other league in the process -- a standard
+    league silently got PPR schedule z-scores.
+    """
+    cols = sorted(c for c in defense.columns
+                  if (c.startswith("fpa_") and not c.endswith("_rank"))
+                  or c in ("def_epa_play", "season", "team"))
+    if not cols:
+        return f"empty:{len(defense)}"
+    h = pd.util.hash_pandas_object(defense[cols], index=False)
+    return hashlib.md5(h.to_numpy().tobytes()).hexdigest()[:12]
+
+
 def strength_of_schedule(target_season: int, defense: pd.DataFrame) -> pd.DataFrame:
-    key = f"sos_{target_season}_{len(defense)}"
+    key = f"sos_{target_season}_{_defense_signature(defense)}"
     if key in _DERIVED:
         return _DERIVED[key]
     out = _strength_of_schedule(target_season, defense)
@@ -372,6 +403,18 @@ def _strength_of_schedule(target_season: int, defense: pd.DataFrame) -> pd.DataF
     and they're the matchups you can least escape.
     """
     sched = sources.schedules()
+    # Regular season only. games.csv carries WC/DIV/CON/SB rows once a season has
+    # been played, and counting them breaks this function's contract twice over.
+    # A drafter in August knows the regular-season schedule -- that is why using it
+    # isn't leakage -- but nobody knows the playoff bracket, because it is decided
+    # by the very season a backtest is predicting. In 2024 that handed Philadelphia
+    # 21 opponents instead of 17, all of them playoff defenses, and added a
+    # divisional rematch to divisional_games, which m_divisional reads as a literal
+    # count against 6. The live board is unaffected (an unplayed season has only REG
+    # rows); draft_backtest and mock_draft on a past season are exactly what this
+    # corrupts.
+    if "game_type" in sched.columns:
+        sched = sched[sched["game_type"] == "REG"]
     games = sched[sched["season"] == target_season]
     if games.empty:  # schedule not published yet — fall back to last known season
         target_season = int(sched["season"].max())

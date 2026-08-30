@@ -11,6 +11,7 @@ This module centralises matching so every join in the codebase uses the same log
 from __future__ import annotations
 
 import re
+import unicodedata
 from difflib import SequenceMatcher
 
 import pandas as pd
@@ -71,14 +72,28 @@ HARD_ALIASES: dict[str, str] = {
     "laviska shenault jr": "laviska shenault",
     "pierre strong jr": "pierre strong",
     "tyrone tracy jr": "tyrone tracy",
-    "audric estime": "audric estime",
     "velus jones jr": "velus jones",
 }
 
 
+def _fold_accents(name: str) -> str:
+    """Strip diacritics, keeping the base letter.
+
+    PUNCT deletes anything outside [a-z0-9 ], so an accented letter became a
+    *space* rather than its plain form: "Audric Estimé" normalised to
+    "audric estim" while FantasyPros' unaccented "Audric Estime" gave
+    "audric estime". Two keys, no join, and a player who scored all season
+    reads as having scored zero -- the exact silent failure this module exists
+    to prevent. Decomposing first turns é into e plus a combining mark, and
+    dropping only the combining marks leaves the letter behind.
+    """
+    return "".join(c for c in unicodedata.normalize("NFKD", str(name))
+                   if not unicodedata.combining(c))
+
+
 def _base_norm(name: str) -> str:
     """Normalization without alias substitution — keeps the original spelling's tokens."""
-    n = str(name).lower().strip()
+    n = _fold_accents(name).lower().strip()
     n = n.replace("'", "").replace("`", "").replace(".", " ").replace("-", " ")
     n = PUNCT.sub(" ", n)
     n = SUFFIX.sub(" ", n)
@@ -86,8 +101,8 @@ def _base_norm(name: str) -> str:
 
 
 def normalize(name: str) -> str:
-    """Canonical key: lowercase, no punctuation, no generational suffix."""
-    n = str(name).lower().strip()
+    """Canonical key: lowercase, no punctuation, no accents, no generational suffix."""
+    n = _fold_accents(name).lower().strip()
     n = n.replace("'", "").replace("`", "").replace(".", " ").replace("-", " ")
     n = PUNCT.sub(" ", n)
     n = SUFFIX.sub(" ", n)
