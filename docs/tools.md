@@ -51,6 +51,11 @@ or minutes on a genuinely cold cache.
 Pass `league_id` in an IDP league to build the defender board too — it needs your
 league's own scoring, so there is no safe default and it is skipped without one.
 
+Doing that reads your league's defensive scoring from ESPN **once, now**, and keeps
+the defender board in memory. Every pick after that is answered locally: no network
+call, nothing rebuilt. That matters more than the time it saves — if ESPN is slow or
+down mid-draft, your defender recommendation is already in hand.
+
 ### `refresh_data`
 Rebuild from source. `force_download=true` re-downloads everything; use when nflverse
 publishes new data mid-season.

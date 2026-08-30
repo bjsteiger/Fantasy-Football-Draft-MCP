@@ -8,6 +8,32 @@ All notable changes to this project. Format follows
 
 ### Fixed
 
+**`prewarm` actually warms the IDP path** ([#44](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/44))
+- The IDP step built a defender board and dropped it. `idp.build_board` has no
+  cache and `espn_scoring_items` is a plain `requests.get`, so passing
+  `league_id` to `prewarm` bought nothing: every `who_should_i_pick`,
+  `plan_my_draft` and `idp_report` re-read ESPN over the network and rebuilt the
+  board from five seasons. Measured at ~0.15s of live ESPN plus ~0.15s of
+  rebuild, on every pick.
+- Both are now cached in-process. Scoring is keyed on league and season; the
+  board on league, season, team count, defensive slots, games floor and lookback
+  window, so a reconfigured or different league builds its own. A failed ESPN
+  read is not cached, so retrying retries.
+- Measured on the real league, draft-day shape — `prewarm(league_id=...)` then
+  three picks' worth of calls: ESPN requests after prewarm went 3 → 0, and each
+  call went 0.29s → 0.000s.
+- The point is not the third of a second. It was a live network dependency on
+  every pick, and `_idp_option` swallowed the failure, so an ESPN blip mid-draft
+  silently removed the defender recommendation and read as "no defender worth
+  taking". Those two now return a short note saying the read failed and what it
+  said, rather than nothing at all.
+- `refresh_data` clears both caches, since the defender board is built from the
+  same weekly stats.
+- The lookback window and the board build are now defined in one place instead
+  of being repeated at four call sites — the same duplication that once had
+  `idp_report` reading one season while `who_should_i_pick` read five, and the
+  two naming different best defenders.
+
 **ESPN failures say what went wrong** ([#46](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/46))
 - Every ESPN read ended in a bare `raise_for_status()`. ESPN sends no reason
   phrase, so that raises `401 Client Error:  for url: ...` — empty exactly where
