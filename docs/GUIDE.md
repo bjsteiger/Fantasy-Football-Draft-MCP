@@ -135,7 +135,7 @@ maps to:
 configure_league(
     name="home", teams=10, draft_slot=4, rounds=16,
     scoring="full_ppr", snake=True,
-    qb=1, rb=2, wr=2, te=1, flex=1, superflex=0,
+    qb=1, rb=2, wr=2, te=1, flex=1, idp=0, superflex=0,
     te_premium_bonus=0.0, consistency_weight=0.35,
 )
 ```
@@ -149,6 +149,7 @@ configure_league(
 | `scoring` | `"half_ppr"` | `ppr` / `full_ppr`, `half_ppr`, `standard` / `non_ppr`. |
 | `snake` | `true` | `false` for a linear (non-snake) draft. |
 | `qb`, `rb`, `wr`, `te`, `flex` | 1 / 2 / 2 / 1 / 1 | Starting roster slots. K and DST are fixed at 1 each and not modelled. |
+| `idp` | 0 | Individual defensive player slots — LB, DL, DB, edge, or a generic defensive flex. Set it if your league starts defenders; rank them with `idp_report`. |
 | `superflex` | 0 | Extra slots where a QB may also start. Shifts replacement level and roster-need logic — quarterbacks become genuinely scarce. |
 | `te_premium_bonus` | 0.0 | Extra fantasy points per TE reception, on top of `scoring`. |
 | `consistency_weight` | 0.35 | 0 = pure expected points (upside), 1 = pure week-to-week reliability (floor). |
@@ -166,6 +167,40 @@ Two leagues with identical `teams`/`scoring`/`starters`/`superflex`/`te_premium_
 share one cached board (`cache_key()` hashes exactly those fields) — switching between
 them is instant. Draft state (picks recorded, your roster) is always kept separate per
 league name, regardless of whether the board is shared.
+
+### If your league starts defenders
+
+Say so, and the round arithmetic stays honest:
+
+```
+Set up my ESPN league: 10 teams, full PPR, I pick 4th, and 1 LB slot.
+```
+
+adds `idp=1`. Defensive players are deliberately *not* projected by the offence
+model — none of its environment multipliers (O-line, pace, separation, red zone
+role) mean anything for a linebacker, and widening the position list to include
+one would fabricate inputs like "points a defence allows to opposing
+linebackers" and corrupt the real QB/RB/WR/TE projections. So the count is used
+only for arithmetic: `idp`, like `K` and `DST`, is subtracted from your
+modellable rounds, and those rounds are skipped in simulations rather than
+filled with a recommendation the model can't make.
+
+Ranking the defenders themselves is a separate call, `idp_report` (§8), which
+needs your ESPN `league_id`:
+
+```
+Rank the linebackers for my league.
+```
+
+Two things worth knowing about IDP support, up front:
+
+- **It's ESPN-only, and `league_id` is required.** IDP scoring varies too much
+  between leagues to guess — tackles alone range from 0.5 to 2 points, and some
+  leagues score assists double — so scoring is read from your own league
+  settings rather than assumed.
+- **There is no ADP for defenders**, so nothing can tell you whether a linebacker
+  will last to your next pick. Every other recommendation in this tool weighs
+  value against survival odds; for defenders only the value half exists.
 
 ---
 
@@ -231,7 +266,7 @@ A typical `who_should_i_pick` answer:
 
 ### Setup & league management
 
-**`configure_league(name, teams, draft_slot, rounds, scoring, snake, qb, rb, wr, te, flex, superflex, te_premium_bonus, consistency_weight, adp_csv_path)`**
+**`configure_league(name, teams, draft_slot, rounds, scoring, snake, qb, rb, wr, te, flex, idp, superflex, te_premium_bonus, consistency_weight, adp_csv_path)`**
 Create or update a named league; makes it active. See the table in §5.
 
 **`list_leagues()`**
@@ -246,9 +281,11 @@ them.
 Delete a league and its draft history. The board cache is left alone — other
 leagues sharing the same format may still need it.
 
-**`prewarm(verbose=True)`**
+**`prewarm(verbose=True, league_id=None)`**
 Build every cache before draft day (§6). `verbose=false` suppresses the
-per-step timing breakdown.
+per-step timing breakdown. In an IDP league pass `league_id` to build the
+defender board too — it's skipped without one, since ranking defenders needs
+your league's own scoring and there is no safe default.
 
 **`refresh_data(force_download=False)`**
 Rebuild the board from source data. `force_download=true` deletes every cached
@@ -274,13 +311,23 @@ rebuild the board. All are `None` by default (leaves current value unchanged).
 
 **`on_the_clock(platform, league_id, draft_id, pasted_board, season, limit)`**
 The full workflow in one call — see §7. Takes exactly `sync_draft`'s arguments plus
-`limit` (default 6) for how many recommendations to return.
+`limit` (default 6) for how many recommendations to return. `league_id` is passed
+through to `who_should_i_pick`, so on ESPN an open IDP slot surfaces its `idp_option`
+here too — this is the call you make under a pick clock, and a defender option that
+only appeared in a separate tool wouldn't be seen in time to matter.
 
-**`who_should_i_pick(limit=6)`**
+**`who_should_i_pick(limit=6, league_id=None)`**
 The core recommendation call. Weighs projected value, week-to-week consistency,
 your roster's open starting slots, and each player's odds of surviving to your next
 pick. Returns the pick being evaluated, your current roster, ranked recommendations
 with plain-language reasoning, and a one-line headline.
+
+With an IDP slot still open, pass `league_id` and the best available defender comes
+back alongside as `idp_option` — so you don't have to run a second tool with the
+clock running. It sits *beside* the ranked list rather than inside it, because the
+ranking trades value against survival odds and defenders have no draft market to
+estimate survival from. Its `vor` is directly comparable with the offensive rows: a
+weekly score sums your starters wherever they line up.
 
 **`best_available(position=None, limit=15, sort_by="draft_score")`**
 Next best players still on the board. `sort_by`: `draft_score` (balanced), `vor`
@@ -309,12 +356,14 @@ Clear all recorded picks for the active league and start over.
 Round, on-the-clock pick, your recorded roster, and per-pick detail (player,
 position, projected points) for what you've drafted so far.
 
-**`plan_my_draft(strategy="balanced")`**
+**`plan_my_draft(strategy="balanced", league_id=None)`**
 Simulates your entire remaining draft from your slot, pick by pick, modelling who
 realistically falls to you at each turn from ADP. `strategy`: `balanced`,
 `zero_rb`, `hero_rb`, `robust_rb`. Returns a full projected final roster and
-starter-points total. Treat as preparation, not a script — `who_should_i_pick` live
-will deviate from this the moment your real draft room does.
+starter-points total. Only modellable rounds are planned — your total rounds minus
+the `K`, `DST` and `idp` starting slots — and passing `league_id` in an IDP league
+adds an `idp_pick` for the defender to target. Treat as preparation, not a script —
+`who_should_i_pick` live will deviate from this the moment your real draft room does.
 
 ### Player & team research
 
@@ -354,9 +403,35 @@ is exactly what `matchup_backtest` exists to catch. Needs the `fixed_drive_resul
 back empty for a season that should have data.
 
 **`defense_report(position="RB", limit=32)`**
-Fantasy points allowed to a position, current season and 5-year average, both
-ranked. Rank 1 = toughest matchup — this is what drives the model's schedule
-adjustment.
+Fantasy points allowed *to* a position by NFL defences, current season and 5-year
+average, both ranked. Rank 1 = toughest matchup — this is what drives the model's
+schedule adjustment. It's a matchup-strength tool, not a draft board: to draft
+defensive players, use `idp_report`.
+
+**`idp_report(league_id, season=None, limit=15, position=None, min_games=8, timing_seasons=None)`**
+Ranks individual defensive players, for leagues with an IDP roster slot (§5). A
+separate board on purpose — defenders aren't projected by the offence model, and
+none of its multipliers apply to them.
+
+`league_id` (ESPN) is required, not a convenience: IDP scoring differs enormously
+between leagues, and a guessed scoring system would produce a confident, wrong
+ranking. Ranking is by per-game rate carried over a 17-game season, so it answers
+who is best *per game* — a player who missed time isn't penalised for it. `min_games`
+gates that rate; without it a defender with one big game projects a rate no starter
+sustains and lands first. `vor` is the only figure comparable against offensive
+players, since raw defensive totals are far larger and mean nothing across positions.
+
+**Read the order, not the totals.** Reproducing ESPN's own IDP figures from public
+data carries ~3.5% mean error — ESPN and nflverse disagree on how many of a player's
+tackles were solo versus assisted, an unofficial, human-scored stat. Rank correlation
+is 0.97, so the ordering holds; two players within ~12 points are not meaningfully
+separated. Derivation in [idp-scoring-derivation.md](idp-scoring-derivation.md).
+
+`timing_seasons` (e.g. `"2024,2025"`) adds when defenders actually left the board in
+your league's own past drafts — which is what "can I wait?" really depends on. There
+is deliberately no per-player IDP draft position: published IDP consensus correlated
+0.30 with actual pick across two real seasons, so which specific defender goes when is
+close to noise. How many are gone by a given pick is the part that holds.
 
 **`value_picks(limit=20, direction="undervalued")`**
 Where the model disagrees with the draft market, restricted to players the market
