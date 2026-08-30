@@ -77,6 +77,14 @@ class Scoring:
 @dataclass
 class LeagueSettings:
     name: str = "default"
+    # Your league's id on ESPN -- the number in its URL. Stored per league
+    # rather than as one environment variable because it is a property of the
+    # league, not of the machine: two leagues have two different ids, and a
+    # single env var cannot say which id belongs to which. Kept out of
+    # cache_key on purpose -- it identifies where settings were read from and
+    # changes no projection, so two leagues that share settings still share a
+    # board. Optional: paste-based and Sleeper drafts never need one.
+    league_id: str | None = None
     teams: int = 12
     rounds: int = 16
     draft_slot: int = 6           # your 1-indexed pick in round 1

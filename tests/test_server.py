@@ -527,3 +527,86 @@ class TestIdpCaches:
         assert out is not None
         assert "401" in out["detail"]
         assert out["use"] == "idp_report"
+
+
+class TestResolveLeagueId:
+    """Tools fall back to the active league's stored ESPN id (#50)."""
+
+    def _active(self, monkeypatch, league):
+        monkeypatch.setitem(server._CACHE, "league", league)
+        monkeypatch.setitem(server._CACHE, "weights", ModelWeights())
+
+    def test_the_stored_id_is_used_when_none_is_passed(self, monkeypatch):
+        self._active(monkeypatch, LeagueSettings(name="home", league_id="1431833696"))
+        assert server._resolve_league_id(None) == "1431833696"
+
+    def test_a_passed_id_wins_over_the_stored_one(self, monkeypatch):
+        # A one-off question about another league must not need reconfiguring.
+        self._active(monkeypatch, LeagueSettings(name="home", league_id="1431833696"))
+        assert server._resolve_league_id("999999") == "999999"
+
+    def test_an_integer_still_works(self, monkeypatch):
+        self._active(monkeypatch, LeagueSettings(name="home"))
+        assert server._resolve_league_id(1431833696) == "1431833696"
+
+    def test_no_stored_id_and_none_passed_stays_none(self, monkeypatch):
+        # Sleeper and pasted boards never need one, so this is not an error.
+        self._active(monkeypatch, LeagueSettings(name="home"))
+        assert server._resolve_league_id(None) is None
+
+    def test_a_junk_stored_id_is_reported_not_sent_to_espn(self, monkeypatch):
+        self._active(monkeypatch, LeagueSettings(name="home", league_id="not-a-number"))
+        with pytest.raises(server.LeagueIdError):
+            server._resolve_league_id(None)
+
+
+class TestConfigureLeagueId:
+    """configure_league is where the id gets set, and it merges like the rest."""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        saved: dict[str, tuple] = {}
+
+        def fake_load(name=None):
+            entry = saved.get(name)
+            if entry is None:
+                return LeagueSettings(), ModelWeights()
+            league, weights = entry
+            return replace(league), replace(weights)
+
+        monkeypatch.setattr(server, "load_settings", fake_load)
+        monkeypatch.setattr(server, "save_settings",
+                            lambda lg, w, make_active=True: saved.__setitem__(
+                                lg.name, (replace(lg), replace(w))))
+        monkeypatch.setattr(server, "cfg_list_leagues", lambda: (sorted(saved), None))
+        monkeypatch.setitem(server._CACHE, "league", None)
+        monkeypatch.setitem(server._CACHE, "weights", None)
+        return saved
+
+    def test_it_is_stored_and_echoed(self, store):
+        out = json.loads(server.configure_league(name="home", league_id="1431833696"))
+        assert out["league_id"] == "1431833696"
+        assert store["home"][0].league_id == "1431833696"
+
+    def test_an_integer_is_accepted(self, store):
+        server.configure_league(name="home", league_id=1431833696)
+        assert store["home"][0].league_id == "1431833696"
+
+    def test_leaving_it_out_keeps_the_stored_one(self, store):
+        store["home"] = (LeagueSettings(name="home", league_id="1431833696", teams=10),
+                         ModelWeights())
+
+        server.configure_league(name="home", idp=1)
+
+        assert store["home"][0].league_id == "1431833696"
+
+    def test_each_league_keeps_its_own(self, store):
+        server.configure_league(name="home", league_id="111")
+        server.configure_league(name="work", league_id="222")
+        assert store["home"][0].league_id == "111"
+        assert store["work"][0].league_id == "222"
+
+    def test_a_junk_id_is_refused_before_anything_is_saved(self, store):
+        out = json.loads(server.configure_league(name="home", league_id="abc123"))
+        assert "error" in out
+        assert "home" not in store
