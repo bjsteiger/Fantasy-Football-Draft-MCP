@@ -59,6 +59,25 @@ All notable changes to this project. Format follows
 
 ### Fixed
 
+**Board unusable on the declared pandas floor**
+- `model.project()` raised `TypeError` on pandas 2.0 and 2.1, both of which
+  `pyproject.toml` declares supported (`pandas>=2.0`). `include_groups` only
+  exists on `groupby.apply` from pandas 2.2; before that the keyword is handed
+  straight to the applied function, which does not accept it. Every
+  recommendation path runs through `project()`, so on those versions the tool
+  did not degrade — it did not work at all.
+- CI could not have caught it, and still cannot from the version matrix alone:
+  pandas 3.0 requires Python 3.11, so the 3.10 job resolves pandas 2.3.3 and the
+  3.11/3.12 jobs resolve 3.0.5. All three carry `include_groups`, so the matrix
+  stays green across every version it actually tests. Only a pinned 2.0.x or
+  2.1.x — which the dependency range permits — reaches the broken path.
+- Replaced with a plain grouped loop. The lambda never read the grouping column,
+  which is the only thing `include_groups=False` suppressed, so the result is
+  unchanged on the versions that already worked.
+- Verified against the floor rather than assumed: the suite passes on pandas
+  2.0.3, 2.1.4 and 3.0.5, and `project()` builds a board on each. The pre-fix
+  code raises on both 2.0.3 and 2.1.4.
+
 **Roster slots the model does not cover**
 - An ESPN league with a defensive-player slot lost it entirely: the slot matched
   neither the base nor the flex branch and vanished from `starters`, while still
