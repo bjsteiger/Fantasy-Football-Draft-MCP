@@ -4,7 +4,7 @@ A live draft assistant. Connect it to Claude, sync your ESPN or Sleeper draft bo
 ask "who should I pick?" at every turn. It answers with a recommendation, the reasoning,
 and the odds each player survives to your next pick.
 
-[![CI](https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/actions/workflows/ci.yml)
+[![CI](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/actions/workflows/ci.yml/badge.svg)](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -16,7 +16,7 @@ from **247,284 plays** across five seasons, priced against real 2026 preseason c
 ## Quick start
 
 ```bash
-git clone https://github.com/zacharytran26/Fantasy-Football-Draft-MCP.git
+git clone https://github.com/bjsteiger/Fantasy-Football-Draft-MCP.git
 cd Fantasy-Football-Draft-MCP
 
 # Use a virtual environment (required on macOS with Homebrew Python, and

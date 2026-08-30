@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Open a [private security advisory](https://github.com/zacharytran26/Fantasy-Football-Draft-MCP/security/advisories/new)
+Open a [private security advisory](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/security/advisories/new)
 rather than a public issue. Expect an acknowledgement within a few days.
 
 Please don't file security reports as normal issues — that discloses the problem

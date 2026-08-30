@@ -6,7 +6,7 @@ one-time data download.
 ## 1. Install
 
 ```bash
-git clone https://github.com/zacharytran26/Fantasy-Football-Draft-MCP.git
+git clone https://github.com/bjsteiger/Fantasy-Football-Draft-MCP.git
 cd Fantasy-Football-Draft-MCP
 python3 -m venv .venv
 source .venv/bin/activate      # Windows: .venv\Scripts\activate
