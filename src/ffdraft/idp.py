@@ -195,7 +195,7 @@ def build_board(weekly: pd.DataFrame, scoring: dict[str, float],
 
     if "season" in per_season.columns and per_season["season"].nunique() > 1:
         agg = _recency_weighted(per_season, keys)
-        agg = _shrink_single_season(agg)
+        agg = _shrink_thin_evidence(agg)
     else:
         agg = (per_season.groupby(keys, dropna=False)
                .agg(games=("games", "sum"), ppg=("ppg", "mean")).reset_index())
@@ -263,15 +263,20 @@ def _recency_weighted(per_season: pd.DataFrame, keys: list[str]) -> pd.DataFrame
     return pd.DataFrame(out)
 
 
-# How far a one-season projection is pulled toward the qualified-starter mean.
-# Fitted, not chosen: 0.15 improved both error and ranking on two independent
-# folds (predicting 2024 from 2021-23, and 2025 from 2021-24), and was the
-# optimum in each -- 0.25 was worse in both. See _shrink_single_season.
-SINGLE_SEASON_SHRINK = 0.15
+# How far a thin-evidence projection is pulled toward the qualified-starter
+# mean, by how many seasons it rests on. Fitted, not chosen: this pair beat
+# doing nothing on both mean absolute error and rank correlation across all
+# three folds (2023 from 2021-22, 2024 from 2021-23, 2025 from 2021-24), had the
+# best average error rank of every candidate tried, and each value was at or
+# within 0.001 of its fold-by-fold optimum. Stronger pulls (0.35, 0.40) stopped
+# beating doing nothing, and a third tier for three-season players was tested
+# and left out -- it moved error by 0.0005 and split the folds on ranking, which
+# is not evidence for a constant. See _shrink_thin_evidence.
+EVIDENCE_SHRINK = {1: 0.20, 2: 0.10}
 
 
-def _shrink_single_season(agg: pd.DataFrame) -> pd.DataFrame:
-    """Pull a one-season projection toward the qualified-starter mean.
+def _shrink_thin_evidence(agg: pd.DataFrame) -> pd.DataFrame:
+    """Discount a projection built on one or two seasons toward the starter mean.
 
     A player with one season and a player with five are not equally knowable,
     and the data says so: predicting a held-out season, one-season defenders
@@ -282,23 +287,36 @@ def _shrink_single_season(agg: pd.DataFrame) -> pd.DataFrame:
     of every qualified defender. Regressing toward an all-player mean is the
     trap the offence model already fell into -- that mean is dragged down by
     rotational players, and shrinking real starters toward it cut genuine
-    starters by a third.
+    starters by a third. Retested here against the tiers below: the all-player
+    mean does slightly better on error and worse on ranking in all three folds,
+    and ranking is what a draft board is for. A top-quartile anchor was worse on
+    both.
 
-    Deliberately gentle, and measured rather than assumed. Over two folds this
-    moved mean absolute error from 2.668 to 2.628 and from 2.542 to 2.503, and
-    rank correlation from 0.6577 to 0.6614 and 0.7116 to 0.7159. It changed the
-    top of the board barely at all, which is the honest summary: it is a real
-    improvement in reliability, not a reordering.
+    Where the error actually lives is the top of the board, not the pool. Across
+    the pool a one-season defender is *under*-projected on average (bias -0.33
+    and -0.57 ppg on the two live-scoring folds). Among the twenty players the
+    board ranks highest -- the only ones anyone drafts -- it inverts: one-season
+    players came in +9.07 ppg over their actual 2025 rate against +1.42 for
+    multi-season players, and finished 172nd on average against 27th. That is
+    the failure issue #33 reported, measured.
+
+    Deliberately gentle: nothing here reorders players who have the evidence.
+    Over the three folds this moved mean absolute error 2.581 -> 2.535,
+    0.546 -> 0.530 and 2.444 -> 2.387, and rank correlation 0.7112 -> 0.7188,
+    0.6868 -> 0.6967 and 0.7393 -> 0.7466. Roughly a 2.3% error improvement --
+    real, and small, which is the honest summary.
     """
     if "seasons_used" not in agg.columns or agg.empty:
         return agg
-    one = agg["seasons_used"] == 1
-    if not one.any():
+    thin = agg["seasons_used"].isin(EVIDENCE_SHRINK)
+    if not thin.any():
         return agg
     anchor = float(agg[agg["ppg"] >= agg["ppg"].median()]["ppg"].mean())
-    k = SINGLE_SEASON_SHRINK
     agg = agg.copy()
-    agg.loc[one, "ppg"] = agg.loc[one, "ppg"] * (1 - k) + anchor * k
+    for seasons, k in EVIDENCE_SHRINK.items():
+        rows = agg["seasons_used"] == seasons
+        if rows.any():
+            agg.loc[rows, "ppg"] = agg.loc[rows, "ppg"] * (1 - k) + anchor * k
     return agg
 
 

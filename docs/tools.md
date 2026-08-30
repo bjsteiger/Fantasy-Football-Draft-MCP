@@ -181,6 +181,15 @@ points are not meaningfully separated. See
 `min_games` (default 8) gates the per-game rate. Without it a player with one big
 game projects a rate no starter sustains and lands at number one.
 
+Thin evidence is discounted on top of that gate: a projection resting on one
+season is pulled 0.20 toward the mean of the upper half of the board, and one
+resting on two seasons 0.10. `seasons_used` and `games` are reported so you can
+see which players that applies to. The pull is small by design and does not
+reorder players who are genuinely better — it closes the marginal leads, which
+is where the error was. Measured across three held-out seasons it beat leaving
+the projections alone on both error and rank correlation every time. See
+[idp-roadmap.md](idp-roadmap.md) task 2.
+
 ### `defense_report`
 Fantasy points allowed by position, current season and five-year. Rank 1 = toughest.
 

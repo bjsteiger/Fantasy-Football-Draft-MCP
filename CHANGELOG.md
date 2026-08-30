@@ -6,6 +6,39 @@ All notable changes to this project. Format follows
 
 ## [Unreleased]
 
+### Changed
+
+**IDP projections are discounted by how much evidence they rest on** ([#33](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/33))
+- A one-season projection is now pulled 0.20 toward the mean of the upper half
+  of the board and a two-season projection 0.10, replacing the flat 0.15 for one
+  season and nothing for two. Three or more seasons are untouched.
+- The reported symptom was a defender with one season and 16 games ranking third
+  on the real board, ahead of three five-year veterans including Bobby Wagner.
+  Measuring it showed the pool-wide numbers say the opposite: across every
+  qualified defender, one-season players are *under*-projected (bias -0.33 and
+  -0.57 ppg on two folds). The error is at the top of the board, which is the
+  only part anyone drafts — among the twenty highest-ranked players, one-season
+  players came in +9.07 ppg over their actual 2025 rate against +1.42 for
+  everyone else, and finished 172nd on average against 27th.
+- Fitted on three held-out seasons (2023 from 2021-22, 2024 from 2021-23, 2025
+  from 2021-24), two of them under this league's own ESPN scoring for that year.
+  The adopted pair beats doing nothing on both mean absolute error and rank
+  correlation in every fold — MAE 2.581 → 2.535, 0.546 → 0.530, 2.444 → 2.387;
+  rank correlation 0.7112 → 0.7188, 0.6868 → 0.6967, 0.7393 → 0.7466 — and each
+  value is at or within 0.001 of its own fold-by-fold optimum. About a 2.3%
+  error improvement: real, and small.
+- What lost, recorded because the alternatives look reasonable: stronger pulls
+  (0.35, 0.40) stopped beating doing nothing; a games-based `g/(g+g0)` weight
+  won on top-30 error and was worst of everything on pool-wide error, because it
+  drags five-season players toward the anchor too; a third tier at 0.05 for
+  three-season players moved error by 0.0005 and split the folds, so it was left
+  out; and the all-player mean as anchor was better on error but worse on
+  ranking in all three folds — the trap the offence model already hit.
+- On the live board this moves the one-season defender from 3rd to 6th, behind
+  the veterans he was marginally ahead of, and leaves every multi-season
+  projection unchanged to the tenth of a point. Replacement level does not move,
+  so IDP value over replacement stays comparable with the offence board.
+
 ### Fixed
 
 **`configure_league` no longer resets tuned model weights** ([#32](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/32))

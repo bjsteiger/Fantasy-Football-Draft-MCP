@@ -82,29 +82,95 @@ statement of whether the ordering is defensible. At picks 85-96 the best
 available offensive VOR was +38.6 (RJ Harvey) against a mid-tier linebacker at
 +36.8 -- if defenders come out dominating that range, something is wrong.
 
-### 2. Single-season confidence  *(confirmed live -- tracked in [issue #33](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/33))*
+### 2. Single-season confidence  *(done -- [issue #33](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/33))*
 
 Known unvalidated case, carried from the recency-weighting change. A rookie with
-one strong season and a five-year veteran are treated as equally certain. They
-are not, and one-season players currently top the board.
+one strong season and a five-year veteran were treated as nearly equally
+certain, and one-season players topped the board.
 
 Reproduced 2026-08-30 against the real league board: Carson Schwesinger (1
-season, 16 games) ranked pos_rank 3, ahead of Bobby Wagner (5 seasons, 83
-games). Not a blocker for this draft -- his VOR is still below what a
-competitive offensive pick would return in any round the model would actually
-suggest a defender -- but the ordering among defenders themselves should not
-be trusted at the margin until this is fixed.
+season, 16 games) ranked pos_rank 3 at 411.1 projected points, ahead of Bobby
+Wagner (5 seasons, 83 games) at 408.3.
 
-The 536-defender backtest only covered players *with* 2021-24 history, so this
-is genuinely unmeasured rather than measured-and-accepted.
+#### Where the error actually was
 
-Do not reach for shrinkage toward a cohort mean without testing it. That mean
-spans every rotational defender in the league, and the offence model already hit
-exactly this trap regressing toward an all-player mean full of third-stringers.
+The pool-wide numbers say the opposite of the complaint, and that is the useful
+part. Across every qualified defender a one-season player is *under*-projected:
+bias -0.33 ppg predicting 2024, -0.57 ppg predicting 2025. Shrinking on that
+basis alone would have been wrong.
 
-**Evidence required:** a backtest that includes single-season players, comparing
-whatever adjustment is proposed against doing nothing. If it does not beat doing
-nothing, do nothing and record that.
+It inverts at the top of the board, which is the only part anyone drafts. Among
+the twenty players the board ranked highest, predicting 2025:
+
+| cohort | n | bias (pred - actual) | mean actual rank |
+|---|---|---|---|
+| one season | 1 | **+9.07 ppg** | **172** |
+| two or more | 19 | +1.42 ppg | 27 |
+
+Predicting 2024, over the top 50: +0.90 against +0.29, mean actual rank 146
+against 51. A thin-evidence player reaches the top of the board by having had
+one good run, and a good run is exactly what does not repeat.
+
+#### What was tested
+
+Three folds, each a real held-out season: 2023 from 2021-22, 2024 from 2021-23,
+2025 from 2021-24. The 2024 and 2025 folds use this league's own ESPN scoring
+for those seasons (they differ sharply -- the league sextupled its IDP scoring
+between them); the 2023 fold reuses the 2025 ruleset, since the league did not
+exist then, and is a robustness check rather than a live-league result. Truth is
+actual ppg in the held-out season for defenders with >= 8 games.
+
+Candidates: doing nothing; a flat pull on one-season players at 0.15 through
+0.65; seasons-tiered pulls; and a games-based empirical-Bayes weight
+`g/(g+g0)` applied to everyone. Anchors: upper-half mean, all-player mean,
+top-quartile mean.
+
+| | MAE 2023 | MAE 2024 | MAE 2025 | rho 2023 | rho 2024 | rho 2025 |
+|---|---|---|---|---|---|---|
+| do nothing | 2.5814 | 0.5462 | 2.4444 | 0.7112 | 0.6868 | 0.7393 |
+| 0.15 one-season (shipped in #14) | 2.5283 | 0.5348 | 2.4039 | 0.7207 | 0.6904 | 0.7431 |
+| **0.20 / 0.10 tiered (adopted)** | **2.5350** | **0.5303** | **2.3873** | **0.7188** | **0.6967** | **0.7466** |
+
+The adopted pair beats doing nothing on both metrics in all three folds, has the
+best average error rank of every candidate tried, and each value is at or within
+0.001 of its own fold-by-fold optimum. What lost:
+
+- **Stronger pulls.** 0.35 and 0.40 stopped beating doing nothing.
+- **Games-based shrinkage** `g/(g+g0)`. Best of all candidates on the top-30
+  error, and clearly worst on pool-wide error (0.55 -> 0.69 at g0=32) because it
+  drags every player toward the anchor, including the ones with five seasons of
+  evidence. Not adopted.
+- **A third tier** for three-season players at 0.05. Moved error by 0.0005 and
+  split the folds on ranking. That is not evidence for a constant, so it was
+  left out -- same rule as the missing age curve.
+- **The all-player mean as anchor.** Slightly better on error, worse on ranking
+  in all three folds. Ranking is what a board is for, and this is the anchor the
+  offence model already got burned by.
+
+#### Live board, before and after
+
+Stated before looking: Schwesinger should fall behind Wagner and Oluokun, Cedric
+Gray (also one season) should drop out of the top eight, and no multi-season
+projection should move at all.
+
+```
+ before                          after
+  1 Alex Singleton      415.8     1 Alex Singleton      415.8
+  2 Jordyn Brooks       411.7     2 Jordyn Brooks       411.7
+  3 Carson Schwesinger  411.1     3 Bobby Wagner        408.3
+  4 Bobby Wagner        408.3     4 Foye Oluokun        407.3
+  5 Foye Oluokun        407.3     5 Roquan Smith        405.7
+  6 Roquan Smith        405.7     6 Carson Schwesinger  399.4
+  7 Zaire Franklin      399.3     7 Zaire Franklin      399.3
+  8 Cedric Gray         397.3     8 Blake Cashman       390.1
+  9 Blake Cashman       390.1     9 Cedric Gray         386.4
+ 10 Ernest Jones        381.8    10 Ernest Jones        381.8
+```
+
+Schwesinger 3 -> 6, Gray 8 -> 9, Edgerrin Cooper (two seasons) 32 -> 37. Every
+multi-season projection is unchanged to the tenth of a point; replacement level
+(Ernest Jones, 381.8) does not move, so VOR stays comparable with the offence
+board.
 
 ### 3. CHANGELOG
 
