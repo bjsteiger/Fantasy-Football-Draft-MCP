@@ -104,9 +104,22 @@ Working as intended. Two players match; give a first name.
 Verify the draft id from the URL (`sleeper.com/draft/nfl/<draft_id>`) — that's the draft
 id, not the league id. Mock drafts have their own ids.
 
-**ESPN sync returns 401 or empty**
-Private leagues need `ESPN_SWID` and `ESPN_S2` set before the server starts. Cookies
-expire — log into ESPN and copy fresh ones. See [SECURITY.md](../SECURITY.md).
+**ESPN sync fails**
+The error now tells you which problem it is. Read the number in it:
+
+- **401** — ESPN did not accept your cookies. A private league needs `ESPN_SWID` and
+  `ESPN_S2`, set before the server starts. If they are already set, they have expired:
+  log into ESPN and copy fresh ones. See [SECURITY.md](../SECURITY.md).
+- **403** — the cookies work, but this account is not in that league. Check the id.
+- **404** — no league with that id in that season. Check the id, then the season. A
+  league that started in 2024 has nothing to read for 2023.
+- **429** — too many requests. Wait a minute.
+- **500 and up** — ESPN's problem, not yours. Try again later.
+- **"could not reach ESPN"** — network, not ESPN.
+
+Also check the season. `sync_draft` defaults to the current one, and a season that has
+not drafted yet returns zero picks — which is a real answer, not a failure. Pass
+`season=2025` to read last year's draft.
 
 **ESPN picks show as `ESPN#12345`**
 The player id didn't map. Usually a rookie missing from the crosswalk. Record manually.

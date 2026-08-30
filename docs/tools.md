@@ -114,6 +114,12 @@ Pull the live board.
 - `platform="paste"`, `pasted_board` — any platform. Handles numbered lists,
   "Round 3, Pick 7 — Name", comma-separated runs, trailing team and position tags.
 
+`season` defaults to the current one. A draft you already ran is under its own season,
+so pass `season=2025` to read it — the current season has no picks until it drafts.
+
+If an ESPN read fails you get the reason back: the status code, what it means, and
+what to try. See [troubleshooting](troubleshooting.md) for what each number means.
+
 ### `record_pick` / `undo_pick` / `reset_draft` / `draft_status`
 Manual board management. `record_pick` accepts shorthand.
 

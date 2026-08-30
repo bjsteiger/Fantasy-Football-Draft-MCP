@@ -3,6 +3,8 @@
 Offline like the rest of the suite -- weekly_rosters and every ESPN endpoint are
 substituted, so nothing here touches the network.
 """
+import json
+
 import pandas as pd
 import pytest
 import requests
@@ -123,16 +125,22 @@ class TestIdpSlotLabels:
 class _FakeResponse:
     """Stand-in for requests.Response covering just what board.py calls."""
 
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, text=None):
         self._payload = payload
         self.status_code = status
+        self.text = text if text is not None else json.dumps(payload)
 
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.HTTPError(f"HTTP {self.status_code}")
 
     def json(self):
+        if self._payload is _NOT_JSON:
+            raise ValueError("not json")
         return self._payload
+
+
+_NOT_JSON = object()
 
 
 class TestEspnScoringItems:
@@ -180,7 +188,7 @@ class TestEspnScoringItems:
         # A 401 means the cookies are wrong. Returning [] there would look
         # exactly like a league with no scoring rules.
         self._patch(monkeypatch, {}, status=401)
-        with pytest.raises(requests.HTTPError):
+        with pytest.raises(board.EspnError):
             board.espn_scoring_items("12345")
 
     def test_private_league_cookies_are_sent_with_swid_braced(self, monkeypatch):
@@ -517,3 +525,83 @@ class TestPlayerIndexCache:
         row, how = board.match_player_verbose("Amon-Ra St. Brown", b)
         assert row is not None
         assert isinstance(how, str) and how
+
+
+class TestEspnErrors:
+    """An ESPN read that fails has to say what failed (issue #46).
+
+    Every call ended in a bare `raise_for_status()`, and ESPN sends no reason
+    phrase -- so the message was `401 Client Error:  for url: ...`, empty
+    exactly where the reason belongs. Through the MCP layer even that was lost
+    and the client saw only "Error executing tool sync_draft", which cannot
+    tell expired cookies from a wrong league id from an ESPN outage.
+    """
+
+    def _patch(self, monkeypatch, payload, status=200, text=None, boom=None):
+        def fake_get(url, **kw):
+            if boom is not None:
+                raise boom
+            return _FakeResponse(payload, status, text)
+        monkeypatch.setattr(board.requests, "get", fake_get)
+
+    @pytest.mark.parametrize("status,expected", [
+        (401, "expired"),
+        (403, "member of it"),
+        (404, "season"),
+        (429, "rate-limiting"),
+        (503, "trouble at their end"),
+    ])
+    def test_each_status_says_what_to_do_about_it(self, monkeypatch, status, expected):
+        self._patch(monkeypatch, {}, status=status)
+        with pytest.raises(board.EspnError) as exc:
+            board.sync_espn("12345", 2025)
+        message = str(exc.value)
+        assert str(status) in message
+        assert expected in message
+
+    def test_the_status_code_is_available_on_the_error(self, monkeypatch):
+        # So a caller can branch on it without parsing prose.
+        self._patch(monkeypatch, {}, status=404)
+        with pytest.raises(board.EspnError) as exc:
+            board.espn_scoring_items("12345")
+        assert exc.value.status == 404
+
+    def test_espns_own_words_are_included_but_truncated(self, monkeypatch):
+        self._patch(monkeypatch, {}, status=401, text="x" * 500)
+        with pytest.raises(board.EspnError) as exc:
+            board.sync_espn("12345", 2025)
+        assert "xxx" in str(exc.value)
+        assert len(str(exc.value)) < 700          # not the whole 500-char body
+
+    def test_the_message_never_carries_the_cookies(self, monkeypatch):
+        # The whole point of the error is that it gets pasted into a bug report.
+        monkeypatch.setenv("ESPN_SWID", "{SECRET-SWID}")
+        monkeypatch.setenv("ESPN_S2", "SECRET-S2-VALUE")
+        self._patch(monkeypatch, {}, status=401, text="denied")
+        with pytest.raises(board.EspnError) as exc:
+            board.sync_espn("12345", 2025)
+        assert "SECRET-SWID" not in str(exc.value)
+        assert "SECRET-S2-VALUE" not in str(exc.value)
+
+    def test_an_unreachable_espn_is_named_as_such(self, monkeypatch):
+        self._patch(monkeypatch, {}, boom=requests.ConnectionError("no route"))
+        with pytest.raises(board.EspnError) as exc:
+            board.sync_espn("12345", 2025)
+        assert "could not reach ESPN" in str(exc.value)
+
+    def test_a_timeout_says_it_timed_out(self, monkeypatch):
+        self._patch(monkeypatch, {}, boom=requests.Timeout("slow"))
+        with pytest.raises(board.EspnError) as exc:
+            board.sync_espn("12345", 2025)
+        assert "did not respond" in str(exc.value)
+
+    def test_a_login_page_instead_of_json_is_explained(self, monkeypatch):
+        # ESPN answers 200 with HTML when a session is not what it expects.
+        self._patch(monkeypatch, _NOT_JSON, status=200, text="<html>sign in</html>")
+        with pytest.raises(board.EspnError) as exc:
+            board.sync_espn("12345", 2025)
+        assert "not JSON" in str(exc.value)
+
+    def test_a_good_response_still_comes_back_normally(self, monkeypatch):
+        self._patch(monkeypatch, {"draftDetail": {"picks": []}})
+        assert board.sync_espn("12345", 2025) == []

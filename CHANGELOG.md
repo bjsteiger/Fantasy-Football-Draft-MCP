@@ -8,6 +8,33 @@ All notable changes to this project. Format follows
 
 ### Fixed
 
+**ESPN failures say what went wrong** ([#46](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/46))
+- Every ESPN read ended in a bare `raise_for_status()`. ESPN sends no reason
+  phrase, so that raises `401 Client Error:  for url: ...` — empty exactly where
+  the reason belongs — and through the MCP layer even that was lost: the client
+  saw `Error executing tool sync_draft` and nothing else. Expired cookies, a
+  wrong league id, a private league and an ESPN outage were indistinguishable.
+- All four ESPN endpoints now go through one helper that raises `EspnError`
+  naming the status, what it means here, and a short excerpt of ESPN's own
+  response. 401 says the cookies are missing or expired; 403 says this account
+  cannot read that league; 404 says the id or season is wrong; 429 says
+  rate-limited; 5xx says it is ESPN's end. A timeout and an unreachable host say
+  so plainly, and an HTML login page returned as a 200 is called out instead of
+  failing as a JSON parse error.
+- Cookie values never appear in the message. There is a test for that, because
+  these errors get pasted into bug reports.
+- `sync_draft` answers with the error instead of raising, so the reason reaches
+  you rather than the framework's generic failure. Sleeper reads are wrapped the
+  same way.
+- Verified against live ESPN: expired cookies return the 401 text, an unknown
+  league id and a season before the league existed both return the 404 text, and
+  a good call still syncs 150 picks.
+- Note on the original report: `sync_draft` with a **quoted** league id works on
+  master today. The failure reported was on v1.2.0, where an unquoted integer id
+  was rejected by argument validation before the tool ran — fixed separately in
+  #40. What is fixed here is the diagnosability gap that made it impossible to
+  tell those apart.
+
 **`configure_league` changes only what you pass it** ([#37](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/37))
 - Every league setting was rebuilt from parameter defaults on each call, so a
   call that named one thing reset everything else. On the real league,

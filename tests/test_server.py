@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from ffdraft import board as bd
 from ffdraft import server, sources
 from ffdraft.config import LeagueSettings, ModelWeights, Scoring
 
@@ -366,3 +367,50 @@ class TestPrewarmStepFailures:
     def test_a_message_less_exception_still_names_the_class(self):
         out = server._step_failure(RuntimeError())
         assert out == "failed: RuntimeError"
+
+
+class TestSyncDraftFailures:
+    """A failed sync answers with the reason (issue #46).
+
+    `sync_espn` raised straight through the tool layer, so the client saw the
+    MCP framework's generic "Error executing tool sync_draft" with the status
+    code and ESPN's own words stripped off. Expired cookies, a wrong league id
+    and an ESPN outage were indistinguishable from the outside.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _offline(self, monkeypatch):
+        # sync_draft builds the offence board first; that is not what is under
+        # test here, so it is stubbed rather than built.
+        monkeypatch.setattr(server, "_build_board", lambda *a, **k: pd.DataFrame(
+            [{"name": "Josh Allen", "_key": "joshallen"}]))
+
+    def test_an_espn_error_comes_back_as_an_answer_not_a_crash(self, monkeypatch):
+        def boom(league_id, season):
+            raise bd.EspnError("ESPN returned 401 for ... -- they have expired", status=401)
+        monkeypatch.setattr(bd, "sync_espn", boom)
+
+        out = json.loads(server.sync_draft(platform="espn", league_id="12345"))
+
+        assert out["status"] == 401
+        assert "401" in out["error"] and "expired" in out["error"]
+        assert out["league_id"] == "12345"
+
+    def test_an_unexpected_failure_still_names_itself(self, monkeypatch):
+        def boom(league_id, season):
+            raise ValueError("something else entirely")
+        monkeypatch.setattr(bd, "sync_espn", boom)
+
+        out = json.loads(server.sync_draft(platform="espn", league_id="12345"))
+
+        assert "ValueError" in out["error"]
+        assert "something else entirely" in out["error"]
+
+    def test_a_sleeper_failure_is_answered_too(self, monkeypatch):
+        def boom(draft_id):
+            raise RuntimeError("sleeper is down")
+        monkeypatch.setattr(bd, "sync_sleeper", boom)
+
+        out = json.loads(server.sync_draft(platform="sleeper", draft_id="abc"))
+
+        assert "sleeper is down" in out["error"]

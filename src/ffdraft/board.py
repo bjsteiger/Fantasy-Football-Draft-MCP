@@ -394,6 +394,89 @@ def sync_sleeper(draft_id: str) -> list[dict]:
     return sorted([o for o in out if o["name"]], key=lambda o: o["overall"] or 0)
 
 
+class EspnError(RuntimeError):
+    """An ESPN read that failed, carrying what actually went wrong.
+
+    Every ESPN call used to end in a bare `raise_for_status()`. That raises
+    `HTTPError: 401 Client Error:  for url: ...` -- ESPN sends no reason phrase,
+    so the message is literally empty where the reason belongs. Through the MCP
+    layer even that was lost: the client saw "Error executing tool sync_draft"
+    and nothing else, which cannot distinguish expired cookies from a wrong
+    league id from ESPN being down. See issue #46.
+    """
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
+# What each status actually means for someone holding a league id and a pair of
+# cookies. Written as the next thing to try, not as a description of HTTP.
+_ESPN_STATUS_HELP = {
+    401: "ESPN rejected the credentials. A private league needs ESPN_SWID and "
+         "ESPN_S2 copied from a browser session that is logged in. If they are "
+         "already set, they have almost certainly expired -- copy them again.",
+    403: "The credentials are valid but this account cannot read that league. "
+         "Check the league id, and that this account is a member of it.",
+    404: "No league with that id exists for that season. Check the id, and the "
+         "season -- a league founded later has no earlier seasons to read.",
+    429: "ESPN is rate-limiting this. Wait a minute before trying again.",
+}
+
+
+def _espn_body_excerpt(text: str, limit: int = 200) -> str:
+    """A short, single-line slice of an error body. Never carries credentials:
+    cookies travel in the request, and nothing here reads them back out."""
+    body = " ".join((text or "").split())
+    return body[:limit] + ("..." if len(body) > limit else "")
+
+
+def _espn_get(url: str, params=None, cookies=None, timeout: int = 20) -> dict:
+    """GET an ESPN endpoint, or raise EspnError saying what went wrong.
+
+    The one place ESPN failures are turned into something a person can act on.
+    Callers get parsed JSON or an error naming the status, what it means here,
+    and a short excerpt of ESPN's own response.
+    """
+    try:
+        resp = requests.get(url, params=params, cookies=cookies or {}, timeout=timeout,
+                            headers={"User-Agent": "ffdraft-mcp/1.0"})
+    except requests.Timeout as exc:
+        raise EspnError(f"ESPN did not respond within {timeout}s: {url}") from exc
+    except requests.RequestException as exc:
+        raise EspnError(f"could not reach ESPN ({type(exc).__name__}): {url}") from exc
+
+    if resp.status_code >= 400:
+        help_text = _ESPN_STATUS_HELP.get(resp.status_code)
+        if help_text is None:
+            help_text = ("ESPN is having trouble at their end; this is not a "
+                         "problem with your league id or cookies."
+                         if resp.status_code >= 500 else
+                         "ESPN refused the request.")
+        excerpt = _espn_body_excerpt(resp.text)
+        raise EspnError(
+            f"ESPN returned {resp.status_code} for {url} -- {help_text}"
+            + (f" ESPN said: {excerpt}" if excerpt else ""),
+            status=resp.status_code)
+
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise EspnError(
+            f"ESPN returned something that is not JSON for {url}. "
+            f"That usually means a login page rather than league data. "
+            f"ESPN said: {_espn_body_excerpt(resp.text)}") from exc
+
+
+def _espn_cookies(swid: str | None, espn_s2: str | None) -> dict:
+    """Cookie jar for a private league, with SWID braced the way ESPN wants it."""
+    swid = swid or os.environ.get("ESPN_SWID")
+    espn_s2 = espn_s2 or os.environ.get("ESPN_S2")
+    if not (swid and espn_s2):
+        return {}
+    return {"SWID": swid if swid.startswith("{") else f"{{{swid}}}", "espn_s2": espn_s2}
+
+
 def sync_espn(league_id: str, season: int = CURRENT_SEASON,
               swid: str | None = None, espn_s2: str | None = None) -> list[dict]:
     """Pull picks from an ESPN league's draft detail endpoint.
@@ -402,19 +485,10 @@ def sync_espn(league_id: str, season: int = CURRENT_SEASON,
     espn_s2 cookies from a logged-in browser session, passed here or set as the
     ESPN_SWID / ESPN_S2 environment variables.
     """
-    swid = swid or os.environ.get("ESPN_SWID")
-    espn_s2 = espn_s2 or os.environ.get("ESPN_S2")
     url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
            f"/segments/0/leagues/{league_id}")
-    cookies = {}
-    if swid and espn_s2:
-        cookies = {"SWID": swid if swid.startswith("{") else f"{{{swid}}}",
-                   "espn_s2": espn_s2}
-    resp = requests.get(url, params={"view": ["mDraftDetail", "mTeam", "kona_player_info"]},
-                        cookies=cookies, timeout=20,
-                        headers={"User-Agent": "ffdraft-mcp/1.0"})
-    resp.raise_for_status()
-    data = resp.json()
+    data = _espn_get(url, params={"view": ["mDraftDetail", "mTeam", "kona_player_info"]},
+                     cookies=_espn_cookies(swid, espn_s2))
     picks = (data.get("draftDetail") or {}).get("picks") or []
 
     xwalk = _id_crosswalk()
@@ -529,18 +603,11 @@ def espn_scoring_items(league_id: str, season: int = CURRENT_SEASON,
     detect PPR, and idp.py maps the defensive ones -- so this stays a plain
     fetch rather than deciding on their behalf what the numbers mean.
     """
-    swid = swid or os.environ.get("ESPN_SWID")
-    espn_s2 = espn_s2 or os.environ.get("ESPN_S2")
-    cookies = {}
-    if swid and espn_s2:
-        cookies = {"SWID": swid if swid.startswith("{") else f"{{{swid}}}",
-                   "espn_s2": espn_s2}
     url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
            f"/segments/0/leagues/{league_id}")
-    resp = requests.get(url, params={"view": "mSettings"}, cookies=cookies, timeout=20,
-                        headers={"User-Agent": "ffdraft-mcp/1.0"})
-    resp.raise_for_status()
-    settings = resp.json().get("settings") or {}
+    data = _espn_get(url, params={"view": "mSettings"},
+                     cookies=_espn_cookies(swid, espn_s2))
+    settings = data.get("settings") or {}
     return (settings.get("scoringSettings") or {}).get("scoringItems") or []
 
 
@@ -553,18 +620,10 @@ def espn_league_context(league_id: str, season: int = CURRENT_SEASON,
     configure_league bookkeeping for a season you're not actively drafting.
     """
     swid = swid or os.environ.get("ESPN_SWID")
-    espn_s2 = espn_s2 or os.environ.get("ESPN_S2")
-    cookies = {}
-    if swid and espn_s2:
-        cookies = {"SWID": swid if swid.startswith("{") else f"{{{swid}}}",
-                   "espn_s2": espn_s2}
     url = (f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{season}"
            f"/segments/0/leagues/{league_id}")
-    resp = requests.get(url, params={"view": ["mTeam", "mSettings", "mDraftDetail"]},
-                        cookies=cookies, timeout=20,
-                        headers={"User-Agent": "ffdraft-mcp/1.0"})
-    resp.raise_for_status()
-    data = resp.json()
+    data = _espn_get(url, params={"view": ["mTeam", "mSettings", "mDraftDetail"]},
+                     cookies=_espn_cookies(swid, espn_s2))
     settings = data.get("settings") or {}
     teams = data.get("teams") or []
 
