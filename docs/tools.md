@@ -6,23 +6,40 @@ plain language and the model picks — but this is what's available and what eac
 ## Setup
 
 ### `configure_league`
-Create or update a named league and make it active.
+Set up a league, or change one you already have. Makes it the active league.
 
-| Argument | Default | Notes |
+**Only what you pass gets changed.** Everything you leave out keeps the value it
+already had. So to add a defensive slot to a league you set up weeks ago, this is
+the whole call:
+
+```
+configure_league(name="home", idp=1)
+```
+
+Your team count, scoring, draft slot and model weights all stay put. Use the same
+name to change a league; use a new name to start one.
+
+The "new league" column below is what you get when the name is new. For a league
+that already exists, leaving an argument out means "keep it as is".
+
+| Argument | New league | Notes |
 |---|---|---|
-| `name` | `"default"` | Any label. Reusing a name updates that league. |
+| `name` | `"default"` | Any label. Same name = change that league. |
 | `teams` | 12 | Any size. |
-| `draft_slot` | 6 | Your first-round pick, 1-indexed. Validated against `teams`. |
+| `draft_slot` | 6 | Your first-round pick, counting from 1. Must fit inside `teams`. |
 | `rounds` | 16 | |
 | `scoring` | `"half_ppr"` | `ppr`, `half_ppr`, `standard`. |
 | `snake` | `true` | `false` for linear drafts. |
-| `qb` `rb` `wr` `te` `flex` | 1/2/2/1/1 | Starting slots. |
-| `idp` | 0 | Individual defensive player slots (LB/DL/DB/edge). Counted so
-round arithmetic is right; defensive players are not projected. |
-| `superflex` | 0 | Slots where a QB may also start. |
-| `te_premium_bonus` | 0.0 | Extra points per TE reception. |
-| `consistency_weight` | unchanged | 0 = pure upside, 1 = pure floor. Omit it and an existing league keeps its tuned value (0.35 for a new one). Every other weight is preserved either way — reconfiguring a league never undoes `model_settings` tuning. |
+| `qb` `rb` `wr` `te` `flex` | 1/2/2/1/1 | Starting slots. `K` and `DST` are 1 each. |
+| `idp` | 0 | Defensive player slots (LB/DL/DB/edge). Counted so the round math is right; defenders are ranked by `idp_report`, not the main board. |
+| `superflex` | 0 | Slots where a second QB may start. |
+| `te_premium_bonus` | 0.0 | Extra points per TE catch. |
+| `consistency_weight` | 0.35 | 0 = pure upside, 1 = pure floor. Your other weights are never touched here — tune those with `model_settings`. |
 | `adp_csv_path` | — | Your platform's ADP export. Beats consensus. |
+
+The response repeats every setting the league ended up with — teams, roster slots,
+weights, your picks — so you can check what was kept and what changed. It also says
+whether it created a new league or updated one you already had.
 
 ### `list_leagues` / `switch_league` / `remove_league`
 Manage multiple leagues. Switching is instant — boards are cached per format.

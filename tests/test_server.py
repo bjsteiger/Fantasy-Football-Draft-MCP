@@ -217,6 +217,74 @@ class TestConfigureLeague:
         assert weights.consistency_weight == 0.1
         assert weights.schedule == 0.0   # the rest still carries over
 
+    def test_league_shape_survives_a_one_setting_change(self, store):
+        # Issue #37: the same trap as #32, for the settings you can see. A call
+        # that names only `idp` must not turn a 10-team full-PPR league into the
+        # 12-team half-PPR default.
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10, rounds=16, draft_slot=5,
+                                        scoring=Scoring.preset("ppr")),
+                         ModelWeights())
+
+        server.configure_league(name="rudy", idp=1)
+
+        league, _ = store["rudy"]
+        assert league.teams == 10
+        assert league.draft_slot == 5
+        assert league.scoring.rec == 1.0
+        assert league.starters["IDP"] == 1
+
+    def test_other_roster_slots_are_left_alone(self, store):
+        starters = {"QB": 1, "RB": 2, "WR": 3, "TE": 1, "FLEX": 2,
+                    "K": 1, "DST": 1, "IDP": 0}
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10, starters=starters),
+                         ModelWeights())
+
+        server.configure_league(name="rudy", idp=1)
+
+        kept = store["rudy"][0].starters
+        assert kept["WR"] == 3 and kept["FLEX"] == 2
+        assert kept["IDP"] == 1
+
+    def test_what_you_pass_still_wins(self, store):
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10, superflex=0), ModelWeights())
+
+        server.configure_league(name="rudy", teams=13, scoring="standard", superflex=1)
+
+        league, _ = store["rudy"]
+        assert league.teams == 13
+        assert league.scoring.rec == 0.0
+        assert league.superflex == 1
+
+    def test_a_slot_left_stranded_by_a_smaller_league_is_refused(self, store):
+        # draft_slot is checked against the team count the league ends up with,
+        # not the one that happened to be passed. Slot 12 cannot survive a move
+        # to a 10-team league.
+        store["rudy"] = (LeagueSettings(name="rudy", teams=14, draft_slot=12), ModelWeights())
+
+        out = json.loads(server.configure_league(name="rudy", teams=10))
+
+        assert "error" in out
+        assert store["rudy"][0].teams == 14   # nothing was saved
+
+    def test_the_response_shows_the_settings_that_stuck(self, store):
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10, draft_slot=5,
+                                        scoring=Scoring.preset("ppr")), ModelWeights())
+
+        out = json.loads(server.configure_league(name="rudy", idp=1))
+
+        assert out["status"] == "updated existing league"
+        assert out["teams"] == 10 and out["your_slot"] == 5
+        assert out["scoring"] == "ppr"
+        assert out["starters"]["IDP"] == 1
+
+    def test_a_new_league_says_so_and_uses_the_documented_defaults(self, store):
+        out = json.loads(server.configure_league(name="brand_new"))
+
+        assert out["status"] == "created new league"
+        assert out["teams"] == 12 and out["your_slot"] == 6
+        assert out["scoring"] == "half_ppr"
+        assert store["brand_new"][0].rounds == 16
+
     def test_a_new_league_starts_from_defaults(self, store):
         # A name that has never been configured must not inherit another
         # league's tuning -- separate leagues keep separate models.
