@@ -256,13 +256,15 @@ class TestNoDeadEnds:
     def test_position_check_is_case_insensitive(self):
         from ffdraft import server
         assert server._idp_pointer(position="lb") is not None
-class TestSingleSeasonShrink:
+class TestThinEvidenceShrink:
     """One season and five seasons are not equally knowable.
 
     Measured: predicting a held-out season, one-season defenders landed at 2.80
-    MAE / 0.607 rank correlation against 2.30 / 0.854 for four-season players.
-    A 0.15 pull toward the upper-half mean improved both metrics on two
-    independent folds and was the optimum in each.
+    MAE / 0.607 rank correlation against 2.30 / 0.854 for four-season players,
+    and among the twenty players the board ranked highest they came in +9.07 ppg
+    over their actual rate against +1.42 for multi-season players. A 0.20 pull
+    for one season and 0.10 for two, toward the upper-half mean, beat doing
+    nothing on error and ranking across all three folds (issue #33).
     """
 
     def _mixed(self):
@@ -282,7 +284,26 @@ class TestSingleSeasonShrink:
         rookie = b[b["name"] == "Rookie"].iloc[0]
         assert float(rookie["ppg"]) < 20.0, "an unshrunk rookie would sit at 20"
 
-    def test_multi_season_players_are_untouched(self):
+    def test_a_two_season_player_is_pulled_half_as_far(self):
+        # Same raw rate, different depth of evidence: the two-season player
+        # moves exactly half as far, because 0.10 is half of 0.20. Asserted on
+        # the shrink itself rather than through the board, whose ppg is rounded
+        # to a tenth and would hide the ratio.
+        agg = pd.DataFrame([
+            {"name": "One Season", "ppg": 20.0, "seasons_used": 1},
+            {"name": "Two Seasons", "ppg": 20.0, "seasons_used": 2},
+            {"name": "Vet A", "ppg": 16.0, "seasons_used": 4},
+            {"name": "Vet B", "ppg": 12.0, "seasons_used": 4},
+            {"name": "Vet C", "ppg": 8.0, "seasons_used": 5},
+        ])
+        out = idp._shrink_thin_evidence(agg).set_index("name")["ppg"]
+        moved_one, moved_two = 20.0 - out["One Season"], 20.0 - out["Two Seasons"]
+        assert moved_one > 0
+        assert moved_two == pytest.approx(moved_one / 2)
+        # Nothing with three or more seasons moves at all.
+        assert out["Vet A"] == 16.0 and out["Vet C"] == 8.0
+
+    def test_players_with_enough_seasons_are_untouched(self):
         b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
                             seasons=[2022, 2023, 2024, 2025])
         vet = b[b["name"] == "Veteran"].iloc[0]
@@ -295,15 +316,47 @@ class TestSingleSeasonShrink:
         order = list(b["name"])
         assert order.index("Rookie") < order.index("Veteran")
 
-    def test_a_board_with_no_single_season_players_is_unchanged(self):
+    def test_a_marginal_one_season_lead_over_a_veteran_does_not_hold(self):
+        """The shape of issue #33, in miniature.
+
+        Carson Schwesinger (1 season, 16 games) ranked third on the real board
+        at 411.1 projected points, half a point ahead of Jordyn Brooks and three
+        ahead of Bobby Wagner, both with five seasons. A lead that thin is not
+        evidence of being better; it is the gap the confidence discount exists
+        to close.
+        """
+        rows = []
+        # A board with a real spread, so the upper-half anchor sits below the
+        # top the way it does on a live board rather than on top of it.
+        vets = {"Veteran": 12.5, "Vet 2": 12.0, "Vet 3": 11.0, "Vet 4": 10.0,
+                "Vet 5": 9.0, "Vet 6": 8.0, "Vet 7": 7.0, "Vet 8": 6.0}
+        for wk in range(1, 18):
+            rows.append(_wk("Newcomer", 2025, wk, solo=12.6))   # 0.1 ppg ahead
+            for yr in (2022, 2023, 2024, 2025):
+                for nm, rate in vets.items():
+                    rows.append(_wk(nm, yr, wk, solo=rate))
+        b = idp.build_board(pd.DataFrame(rows), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        order = list(b["name"])
+        assert order.index("Newcomer") > order.index("Veteran")
+
+    def test_a_board_with_no_thin_evidence_players_is_unchanged(self):
         rows = []
         for wk in range(1, 18):
-            for yr in (2024, 2025):
+            for yr in (2023, 2024, 2025):
                 rows.append(_wk("A", yr, wk, solo=10))
                 rows.append(_wk("B", yr, wk, solo=6))
         b = idp.build_board(pd.DataFrame(rows), {"tackles_solo": 1.0},
-                            seasons=[2024, 2025])
+                            seasons=[2023, 2024, 2025])
         assert float(b[b["name"] == "A"].iloc[0]["ppg"]) == pytest.approx(10.0)
+        assert float(b[b["name"] == "B"].iloc[0]["ppg"]) == pytest.approx(6.0)
+
+    def test_a_thin_evidence_player_below_the_anchor_is_pulled_up_not_down(self):
+        # The discount is a confidence adjustment, not a penalty: a one-season
+        # player projecting below the starter mean moves toward it, which is up.
+        b = idp.build_board(self._mixed(), {"tackles_solo": 1.0},
+                            seasons=[2022, 2023, 2024, 2025])
+        assert float(b[b["name"] == "Filler"].iloc[0]["ppg"]) > 4.0
 
 
 class TestStalePlayersExcluded:
