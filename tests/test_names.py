@@ -49,6 +49,30 @@ class TestNormalize:
         for raw in ["Josh Palmer", "D.J. Moore", "Kenneth Walker III"]:
             assert normalize(normalize(raw)) == normalize(raw)
 
+    def test_accents_fold_to_the_plain_letter(self):
+        """Sources disagree on diacritics, and the punctuation strip used to turn
+        an accented letter into a space -- "Estimé" became "estim" and never
+        joined the unaccented "Estime" every ranking site publishes."""
+        assert normalize("Audric Estimé") == "audric estime"
+        assert normalize("Audric Estimé") == normalize("Audric Estime")
+
+    @pytest.mark.parametrize("accented,plain", [
+        ("Aymeric Boissé", "Aymeric Boisse"),
+        ("José Álvarez", "Jose Alvarez"),
+        ("Björn Nuñez", "Bjorn Nunez"),
+    ])
+    def test_accented_and_plain_spellings_share_a_key(self, accented, plain):
+        assert normalize(accented) == normalize(plain)
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("Bijan Robinson", "bijan robinson"),
+        ("CeeDee Lamb", "ceedee lamb"),
+        ("Ja'Marr Chase", "jamarr chase"),
+        ("Amon-Ra St. Brown", "amon ra st brown"),
+    ])
+    def test_plain_ascii_names_are_untouched_by_folding(self, raw, expected):
+        assert normalize(raw) == expected
+
 
 class TestAliasKeys:
     def test_first_name_swaps_both_directions(self):
@@ -95,6 +119,18 @@ class TestResolution:
     def test_initialisms(self, index, query, expected):
         row, _ = index.resolve(query)
         assert row is not None and row["name"] == expected
+
+    def test_accented_board_entry_resolves_from_a_plain_query(self):
+        """The board comes from nflverse (accented); the query comes from a
+        ranking site or a person typing (usually not)."""
+        idx = PlayerIndex(pd.DataFrame([
+            {"name": "Audric Estimé", "position": "RB"},
+            {"name": "Bijan Robinson", "position": "RB"},
+        ]))
+        row, how = idx.resolve("Audric Estime")
+        assert row is not None, f"unresolved ({how})"
+        assert row["name"] == "Audric Estimé"
+        assert how == "exact"
 
     def test_typos_resolve_via_fuzzy(self, index):
         for typo in ["Bijon Robinsen", "Puca Nacua", "CeDee Lamb"]:

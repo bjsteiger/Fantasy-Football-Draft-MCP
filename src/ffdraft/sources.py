@@ -51,7 +51,20 @@ def _cached(name: str, builder, max_age_days: float = 7.0) -> pd.DataFrame:
             df = pd.read_parquet(path)
             _MEM[name] = df
             return df
-    df = builder()
+    try:
+        df = builder()
+    except Exception as exc:
+        # A stale cache beats no data at all. Without this, the one draft-day
+        # failure mode this module promises to prevent -- the network being down
+        # -- crashed every tool the moment a parquet aged past its refresh
+        # window, with a perfectly usable copy sitting on disk.
+        if path.exists():
+            print(f"  ! rebuild of {name} failed ({type(exc).__name__}); "
+                  f"serving stale cache")
+            df = pd.read_parquet(path)
+            _MEM[name] = df
+            return df
+        raise
     df.to_parquet(path, index=False)
     _MEM[name] = df
     return df

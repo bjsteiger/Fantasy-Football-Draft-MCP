@@ -27,6 +27,7 @@ from .config import (
     LeagueSettings,
     ModelWeights,
     Scoring,
+    board_cache_key,
     delete_league,
     load_settings,
     save_settings,
@@ -54,8 +55,8 @@ def _scoring_label(league: LeagueSettings) -> str:
     return "standard"
 
 
-def _board_path(league: LeagueSettings) -> Path:
-    return DATA_DIR / f"board_{league.cache_key()}.parquet"
+def _board_path(league: LeagueSettings, weights: ModelWeights) -> Path:
+    return DATA_DIR / f"board_{board_cache_key(league, weights)}.parquet"
 
 
 # ---------------------------------------------------------------- internals
@@ -68,8 +69,8 @@ def _settings() -> tuple[LeagueSettings, ModelWeights]:
 
 def _build_board(force: bool = False) -> pd.DataFrame:
     league, weights = _settings()
-    key = league.cache_key()
-    path = _board_path(league)
+    key = board_cache_key(league, weights)
+    path = _board_path(league, weights)
 
     if not force and key in _BOARDS:
         return _BOARDS[key]
@@ -341,7 +342,7 @@ def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6
     _CACHE.update({"league": league, "weights": weights, "adp_csv": csvs})
 
     known, _ = cfg_list_leagues()
-    reused = _board_path(league).exists()
+    reused = _board_path(league, weights).exists()
     return json.dumps({
         "league": name, "active": True, "teams": teams, "your_slot": draft_slot,
         "scoring": scoring, "superflex": superflex,
@@ -384,7 +385,7 @@ def switch_league(name: str) -> str:
         "active": name, "teams": league.teams, "your_slot": league.draft_slot,
         "scoring": ("ppr" if league.scoring.rec >= 1 else
                     "standard" if league.scoring.rec == 0 else "half_ppr"),
-        "board": "cached" if _board_path(league).exists() else "will build on next query",
+        "board": "cached" if _board_path(league, weights).exists() else "will build on next query",
         **state.summary(),
     }, indent=2)
 
@@ -709,7 +710,11 @@ def value_picks(limit: int = 20, direction: str = "undervalued") -> str:
             "proj_points", "consistency", "injury_risk", "sep_score"]
     return json.dumps({
         "direction": direction,
-        "adp_source": str(avail["adp_source"].mode().iloc[0]) if "adp_source" in avail else "n/a",
+        # mode() of an empty column has no rows to index. Late in a deep league
+        # every consensus-ranked player inside the ADP cutoff can already be gone,
+        # and .iloc[0] would turn that into an IndexError mid-draft.
+        "adp_source": (str(avail["adp_source"].mode().iloc[0])
+                       if "adp_source" in avail.columns and not avail.empty else "n/a"),
         "note": "market_gap > 0 means the model likes him more than his draft cost",
         "players": _rows(out, cols, limit),
     }, indent=2, default=str)
@@ -1461,6 +1466,9 @@ def model_settings(consistency_weight: float | None = None, injury_weight: float
     already stops the model from wanting a second QB once you have one.
     """
     league, weights = _settings()
+    # The board's cache key includes the weights, so snapshot the old key before
+    # mutating them: it's the stale board that needs evicting, not the new one.
+    old_key = board_cache_key(league, weights)
     for name, val in [("consistency_weight", consistency_weight), ("injury", injury_weight),
                       ("oline", oline_weight), ("schedule", schedule_weight),
                       ("pace_volume", pace_weight), ("td_luck", td_luck_weight),
@@ -1469,8 +1477,8 @@ def model_settings(consistency_weight: float | None = None, injury_weight: float
             setattr(weights, name, float(val))
     save_settings(league, weights)
     _CACHE.update({"weights": weights})
-    _BOARDS.pop(league.cache_key(), None)
-    p = _board_path(league)
+    _BOARDS.pop(old_key, None)
+    p = DATA_DIR / f"board_{old_key}.parquet"
     if p.exists():
         p.unlink()
     return json.dumps({"league": league.name, "weights": weights.__dict__,
