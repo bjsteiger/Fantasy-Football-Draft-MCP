@@ -627,6 +627,12 @@ def sync_draft(platform: str, league_id: str | int | None = None, draft_id: str 
     platform="espn" with league_id -- works for public leagues; private ones need
       ESPN_SWID and ESPN_S2 environment variables from a logged-in browser session.
     platform="paste" with pasted_board -- paste the drafted list from any site.
+
+    season defaults to the current one. A draft you already ran is under its own
+    season, so pass it: an in-progress season has no picks yet.
+
+    If the read fails you get an error saying what ESPN said -- the status code,
+    what it means, and what to try -- rather than a bare failure.
     """
     try:
         league_id = _league_id(league_id)
@@ -639,11 +645,27 @@ def sync_draft(platform: str, league_id: str | int | None = None, draft_id: str 
     if platform == "sleeper":
         if not draft_id:
             return json.dumps({"error": "draft_id required for Sleeper"})
-        picks = bd.sync_sleeper(draft_id)
+        try:
+            picks = bd.sync_sleeper(draft_id)
+        except Exception as exc:
+            return json.dumps({"error": f"couldn't read the Sleeper draft: {exc}",
+                               "draft_id": draft_id}, indent=2)
     elif platform == "espn":
         if not league_id:
             return json.dumps({"error": "league_id required for ESPN"})
-        picks = bd.sync_espn(league_id, season)
+        # A failed read is answered, not raised. Raising reached the client as
+        # "Error executing tool sync_draft" with the status code and reason
+        # stripped off, so expired cookies, a wrong league id and an ESPN
+        # outage all looked identical from the outside. See issue #46.
+        try:
+            picks = bd.sync_espn(league_id, season)
+        except bd.EspnError as exc:
+            return json.dumps({"error": str(exc), "status": exc.status,
+                               "league_id": league_id, "season": season}, indent=2)
+        except Exception as exc:
+            return json.dumps({
+                "error": f"couldn't read the ESPN draft: {type(exc).__name__}: {exc}",
+                "league_id": league_id, "season": season}, indent=2)
     elif platform == "paste":
         if not pasted_board:
             return json.dumps({"error": "pasted_board text required"})
