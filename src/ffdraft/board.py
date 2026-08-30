@@ -608,11 +608,18 @@ def parse_pasted_board(text: str) -> list[str]:
     comma-separated runs, and raw one-per-line names.
     """
     names = []
+    # "Round 3, Pick 7" must lose its comma before the split below, or the split
+    # severs it and the round/pick prefix can never match -- leaving "Pick 7 -
+    # Puka Nacua" as the name, which resolves to nobody.
+    text = re.sub(r"(round\s*\d+)\s*,\s*(pick\s*\d+)", r"\1 \2", text, flags=re.I)
     for chunk in re.split(r"[\n,;]+", text):
         s = chunk.strip()
         if not s:
             continue
-        s = re.sub(r"^\s*(?:R?\d+[.):]|\d+\.\d+|round\s*\d+[,\s]*pick\s*\d+)\s*[-–—:]?\s*", "",
+        # Decimal pick notation leads the alternation: it is ordered, so
+        # R?\d+[.):] would otherwise match the "3." of "3.07" and leave the
+        # stray "07" glued to the front of the name.
+        s = re.sub(r"^\s*(?:R?\d+\.\d+|R?\d+[.):]|round\s*\d+[,\s]*pick\s*\d+)\s*[-–—:]?\s*", "",
                    s, flags=re.I)
         s = re.sub(r"\s*[-–—(]\s*(QB|RB|WR|TE|K|D/?ST|DEF)\b.*$", "", s, flags=re.I)
         s = re.sub(r"\s+[A-Z]{2,3}$", "", s).strip()
