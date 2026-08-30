@@ -82,11 +82,18 @@ statement of whether the ordering is defensible. At picks 85-96 the best
 available offensive VOR was +38.6 (RJ Harvey) against a mid-tier linebacker at
 +36.8 -- if defenders come out dominating that range, something is wrong.
 
-### 2. Single-season confidence
+### 2. Single-season confidence  *(confirmed live -- tracked in [issue #33](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/33))*
 
 Known unvalidated case, carried from the recency-weighting change. A rookie with
 one strong season and a five-year veteran are treated as equally certain. They
 are not, and one-season players currently top the board.
+
+Reproduced 2026-08-30 against the real league board: Carson Schwesinger (1
+season, 16 games) ranked pos_rank 3, ahead of Bobby Wagner (5 seasons, 83
+games). Not a blocker for this draft -- his VOR is still below what a
+competitive offensive pick would return in any round the model would actually
+suggest a defender -- but the ordering among defenders themselves should not
+be trusted at the margin until this is fixed.
 
 The 536-defender backtest only covered players *with* 2021-24 history, so this
 is genuinely unmeasured rather than measured-and-accepted.
@@ -110,11 +117,14 @@ None of the IDP pull requests touched it, so the entry covers the whole arc, not
 just the last change: slot tracking, round arithmetic, the scoring derivation,
 the module, the tool, draft timing, forward projection.
 
-### 4. Prewarm the IDP board
+### 4. Prewarm the IDP board  *(done -- #18)*
 
 `prewarm` builds every cache before draft day. It does not know about IDP, so the
 first `idp_report` of a live draft pays full cost. With 90 seconds per pick that
 matters.
+
+Verified 2026-08-30: `prewarm(league_id=...)` builds the defender board in 0.33s
+alongside every other step.
 
 ### 5. IDP rounds in the simulators  *(done for plan_my_draft; declined for mock_draft)*
 
@@ -132,7 +142,7 @@ behaviour for a position whose real timing correlated 0.30 with published
 consensus would add noise and call it a simulation -- worse than the honest
 exclusion it replaces.
 
-### 6. Score IDP rounds in draft_backtest
+### 6. Score IDP rounds in draft_backtest  *(done -- #19)*
 
 `draft_backtest` labels defensive rounds `your_pick_unmodelled_position` and
 leaves them out of the totals. Defenders can now be scored, so those rounds
@@ -158,6 +168,16 @@ leagues without naming their slots, which is the part that actually matters.
 
 Reopen only with access to a real DL/DB league's payload, where the slot ids in
 `lineupSlotCounts` can be read against a roster that actually uses them.
+
+## Known issues found outside this list
+
+- [Issue #32](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/32)
+  -- `configure_league` rebuilds `ModelWeights` from scratch on every call, so
+  any tuned weight other than `consistency_weight` (schedule, injury, oline,
+  td_luck, qb_boost...) silently resets to its default the next time
+  `configure_league` runs for an existing league, including just to change
+  `idp`/`rounds`/`draft_slot`. Not IDP-specific, but found while auditing this
+  work. `model_settings` itself is unaffected.
 
 ## Reference
 
