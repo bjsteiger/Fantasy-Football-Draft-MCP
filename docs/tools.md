@@ -25,6 +25,7 @@ that already exists, leaving an argument out means "keep it as is".
 | Argument | New league | Notes |
 |---|---|---|
 | `name` | `"default"` | Any label. Same name = change that league. |
+| `league_id` | — | Your league's number on ESPN, from its URL. Set it once and the ESPN tools stop asking for it. Each league keeps its own. |
 | `teams` | 12 | Any size. |
 | `draft_slot` | 6 | Your first-round pick, counting from 1. Must fit inside `teams`. |
 | `rounds` | 16 | |
@@ -40,6 +41,19 @@ that already exists, leaving an argument out means "keep it as is".
 The response repeats every setting the league ended up with — teams, roster slots,
 weights, your picks — so you can check what was kept and what changed. It also says
 whether it created a new league or updated one you already had.
+
+**Set your ESPN league id once.** Every tool that reads ESPN — `sync_draft`, `prewarm`,
+`who_should_i_pick`, `on_the_clock`, `plan_my_draft`, `idp_report`, `draft_backtest`,
+`champion_strategies` — uses the active league's stored id when you don't pass one:
+
+```
+configure_league(name="home", league_id="1431833696")
+```
+
+Two leagues, two ids: each is stored with its own league, and `switch_league` switches
+the id with it. Passing `league_id` to a tool still wins for that one call, so asking
+about someone else's league needs no reconfiguring. Sleeper and pasted boards never
+need an id at all.
 
 ### `list_leagues` / `switch_league` / `remove_league`
 Manage multiple leagues. Switching is instant — boards are cached per format.

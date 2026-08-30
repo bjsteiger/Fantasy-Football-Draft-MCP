@@ -143,6 +143,7 @@ configure_league(
 | Argument | New league | Notes |
 |---|---|---|
 | `name` | `"default"` | Any label. Same name = change that league. |
+| `league_id` | — | Your league's number on ESPN — the digits in its URL. Set it once and every ESPN tool uses it without being told. Each league keeps its own. |
 | `teams` | 12 | Any size. |
 | `draft_slot` | 6 | Your pick in round 1, counting from 1. Must fit inside `teams`. |
 | `rounds` | 16 | |
@@ -174,6 +175,21 @@ ended up with, plus whether it made a new league or changed an existing one — 
 it once to be sure the right league got the change.
 
 The "New league" column above is what you get when the name is new.
+
+### Save your ESPN league id
+
+```
+My ESPN league id is 1431833696.
+```
+
+```python
+configure_league(name="home", league_id="1431833696")
+```
+
+Now `sync_draft`, `prewarm`, `who_should_i_pick`, `idp_report` and the rest find it on
+their own — no more retyping ten digits while the clock runs. Hold two leagues and each
+keeps its own id; `switch_league` moves both at once. You can still pass a different
+`league_id` to any one call when you want to look at another league.
 
 You can hold as many leagues as you like side by side:
 

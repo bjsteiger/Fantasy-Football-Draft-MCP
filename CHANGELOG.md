@@ -8,6 +8,25 @@ All notable changes to this project. Format follows
 
 ## [1.3.0] — 2026-08-30
 
+### Added
+
+**Your ESPN league id is stored with the league** ([#50](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/50))
+- `configure_league` takes `league_id`, and every tool that reads ESPN —
+  `sync_draft`, `prewarm`, `who_should_i_pick`, `on_the_clock`, `plan_my_draft`,
+  `idp_report`, `draft_backtest`, `champion_strategies` — falls back to the
+  active league's stored id when you don't pass one. Ten digits retyped on every
+  on-the-clock call is ten digits to get wrong while the clock runs.
+- Stored per league rather than as one environment variable, because the id
+  belongs to the league and not to the machine: two leagues have two ids and a
+  single env var cannot say which is which. `switch_league` switches the id with
+  everything else, and `list_leagues` shows which league has one.
+- An id passed to a tool still wins for that call, so asking about a different
+  league needs no reconfiguring. Sleeper and pasted boards never need one.
+- Deliberately not part of the board cache key: the id says where settings were
+  read from and changes no projection, so two leagues that share settings still
+  share a board. There is a test pinning that.
+- Leagues saved before this field existed load unchanged, with no id.
+
 ### Fixed
 
 **`prewarm` actually warms the IDP path** ([#44](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/44))

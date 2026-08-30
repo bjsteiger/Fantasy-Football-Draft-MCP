@@ -104,6 +104,23 @@ def _league_id(value: str | int | None) -> str | None:
     return text
 
 
+def _resolve_league_id(value: str | int | None) -> str | None:
+    """The ESPN id for this call: what was passed, else the active league's own.
+
+    Stored on the league rather than in one environment variable, because the id
+    belongs to the league and not to the machine -- two leagues have two ids and
+    a single env var cannot say which is which. Set it once with
+    configure_league and every tool that reads ESPN stops needing the argument;
+    switching leagues switches the id with it. An id passed explicitly still
+    wins, so a one-off call about another league needs no reconfiguring.
+    """
+    explicit = _league_id(value)
+    if explicit:
+        return explicit
+    league, _ = _settings()
+    return _league_id(getattr(league, "league_id", None))
+
+
 def _step_failure(exc: Exception) -> str:
     """Describe a failed prewarm step.
 
@@ -403,7 +420,8 @@ def _idp_plan(league: LeagueSettings, league_id: str | None) -> dict | None:
 # ---------------------------------------------------------------- tools
 
 @mcp.tool()
-def configure_league(name: str = "default", teams: int | None = None,
+def configure_league(name: str = "default", league_id: str | int | None = None,
+                     teams: int | None = None,
                      draft_slot: int | None = None, rounds: int | None = None,
                      scoring: str | None = None, snake: bool | None = None,
                      qb: int | None = None, rb: int | None = None,
@@ -422,6 +440,12 @@ def configure_league(name: str = "default", teams: int | None = None,
 
     New-league defaults: 12 teams, 16 rounds, pick 6, half PPR, snake, and
     1 QB / 2 RB / 2 WR / 1 TE / 1 FLEX / 1 K / 1 DST / 0 IDP.
+
+    league_id is your league's number on ESPN, the one in its URL. Set it once
+    and every tool that reads ESPN -- sync_draft, prewarm, who_should_i_pick,
+    idp_report, draft_backtest -- uses it without being told. Each league keeps
+    its own, so switching leagues switches the id too, and passing one to a tool
+    still wins for that call.
 
     scoring: ppr, half_ppr, or standard. superflex=1 adds a slot where a second
     quarterback may start. te_premium_bonus adds points per tight end catch.
@@ -450,6 +474,11 @@ def configure_league(name: str = "default", teams: int | None = None,
     existed = name in known
     stored, weights = load_settings(name)
 
+    try:
+        league_id = _league_id(league_id) or stored.league_id
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
+
     def pick(passed, current):
         return current if passed is None else passed
 
@@ -475,7 +504,8 @@ def configure_league(name: str = "default", teams: int | None = None,
             starters[slot] = int(passed)
 
     league = LeagueSettings(
-        name=name, teams=teams, rounds=rounds, draft_slot=draft_slot, snake=snake,
+        name=name, league_id=league_id, teams=teams, rounds=rounds,
+        draft_slot=draft_slot, snake=snake,
         scoring=stored.scoring if scoring is None else Scoring.preset(scoring),
         starters=starters, superflex=superflex, te_premium_bonus=te_premium_bonus,
     )
@@ -494,7 +524,8 @@ def configure_league(name: str = "default", teams: int | None = None,
         "league": name,
         # Says plainly whether settings were inherited or started fresh.
         "status": "updated existing league" if existed else "created new league",
-        "active": True, "teams": teams, "your_slot": draft_slot,
+        "active": True, "league_id": league_id,
+        "teams": teams, "your_slot": draft_slot,
         "rounds": rounds, "snake": snake,
         "scoring": _scoring_label(league), "superflex": superflex,
         "te_premium_bonus": te_premium_bonus,
@@ -520,7 +551,8 @@ def list_leagues() -> str:
         lg, _ = load_settings(nm)
         state = bd.DraftState(lg)
         out.append({
-            "name": nm, "active": nm == active, "teams": lg.teams,
+            "name": nm, "active": nm == active, "league_id": lg.league_id,
+            "teams": lg.teams,
             "scoring": ("ppr" if lg.scoring.rec >= 1 else
                         "standard" if lg.scoring.rec == 0 else "half_ppr"),
             "your_slot": lg.draft_slot, "superflex": lg.superflex,
@@ -539,7 +571,8 @@ def switch_league(name: str) -> str:
     _CACHE.update({"league": league, "weights": weights})
     state = bd.DraftState(league)
     return json.dumps({
-        "active": name, "teams": league.teams, "your_slot": league.draft_slot,
+        "active": name, "league_id": league.league_id,
+        "teams": league.teams, "your_slot": league.draft_slot,
         "scoring": ("ppr" if league.scoring.rec >= 1 else
                     "standard" if league.scoring.rec == 0 else "half_ppr"),
         "board": "cached" if _board_path(league, weights).exists() else "will build on next query",
@@ -620,7 +653,7 @@ def who_should_i_pick(limit: int = 6, league_id: str | int | None = None) -> str
     slots, and the odds each player survives to your next pick.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     league, _ = _settings()
@@ -694,7 +727,7 @@ def sync_draft(platform: str, league_id: str | int | None = None, draft_id: str 
     what it means, and what to try -- rather than a bare failure.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     state = _state()
@@ -931,7 +964,7 @@ def on_the_clock(platform: str, league_id: str | int | None = None, draft_id: st
     are exactly sync_draft's arguments.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     sync = json.loads(sync_draft(platform, league_id, draft_id, pasted_board, season))
@@ -1112,7 +1145,7 @@ def draft_backtest(league_id: str | int, season: int, top_n: int = 3) -> str:
     actual pick only, same as everywhere else. Only ESPN is supported.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     out = adp_mod.draft_backtest(league_id, season, top_n=top_n)
@@ -1181,7 +1214,7 @@ def champion_strategies(league_id: str | int,
     timing data but no value verdicts or steal context. ESPN only.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     yrs = [int(s) for s in seasons.split(",") if s.strip()]
@@ -1285,7 +1318,7 @@ def prewarm(verbose: bool = True, league_id: str | int | None = None) -> str:
     the defender recommendation away from you.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     import time as _time
@@ -1465,7 +1498,7 @@ def plan_my_draft(strategy: str = "balanced", league_id: str | int | None = None
     strategy: balanced, zero_rb, hero_rb, or robust_rb.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     league, weights = _settings()
@@ -1565,7 +1598,7 @@ def idp_report(league_id: str | int | None = None, season: int | None = None,
     the part that holds.
     """
     try:
-        league_id = _league_id(league_id)
+        league_id = _resolve_league_id(league_id)
     except LeagueIdError as exc:
         return json.dumps({"error": str(exc)}, indent=2)
     from . import idp as idp_mod

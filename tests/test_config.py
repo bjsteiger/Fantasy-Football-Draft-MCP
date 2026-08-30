@@ -238,3 +238,47 @@ class TestBoardCacheVersioning:
                 != LeagueSettings(superflex=1).cache_key())
         assert (LeagueSettings(scoring=Scoring.preset("ppr")).cache_key()
                 != LeagueSettings(scoring=Scoring.preset("standard")).cache_key())
+
+
+class TestStoredLeagueId:
+    """The ESPN league id belongs to the league, not to the machine (#50).
+
+    It used to be an argument on every ESPN-reading tool and nothing else, so it
+    had to be retyped on every call, and there was nowhere to say which id went
+    with which league.
+    """
+
+    def test_it_survives_a_save_and_load(self, tmp_path, monkeypatch):
+        import json as _json
+
+        from ffdraft import config as cfg
+        monkeypatch.setattr(cfg, "LEAGUES_PATH", tmp_path / "leagues.json")
+        cfg.save_settings(LeagueSettings(name="home", league_id="1431833696"),
+                          ModelWeights())
+
+        league, _ = cfg.load_settings("home")
+        assert league.league_id == "1431833696"
+        # And it is stored as a string, so a leading zero could not be eaten.
+        raw = _json.loads((tmp_path / "leagues.json").read_text())
+        assert raw["leagues"]["home"]["league"]["league_id"] == "1431833696"
+
+    def test_a_league_saved_before_the_field_existed_still_loads(self, tmp_path,
+                                                                monkeypatch):
+        import json as _json
+
+        from ffdraft import config as cfg
+        path = tmp_path / "leagues.json"
+        path.write_text(_json.dumps({"active": "old", "leagues": {"old": {
+            "league": {"name": "old", "teams": 10}, "scoring": {}, "weights": {}}}}))
+        monkeypatch.setattr(cfg, "LEAGUES_PATH", path)
+
+        league, _ = cfg.load_settings("old")
+        assert league.league_id is None
+        assert league.teams == 10
+
+    def test_two_leagues_with_different_ids_still_share_a_board(self):
+        # The id says where settings were read from. It changes no projection,
+        # so it must not fragment the board cache.
+        a = LeagueSettings(name="a", league_id="111", teams=10)
+        b = LeagueSettings(name="b", league_id="222", teams=10)
+        assert a.cache_key() == b.cache_key()
