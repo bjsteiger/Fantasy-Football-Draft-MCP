@@ -6,6 +6,8 @@ All notable changes to this project. Format follows
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-08-30
+
 ### Changed
 
 **IDP projections are discounted by how much evidence they rest on** ([#33](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/33))
