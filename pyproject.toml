@@ -1,6 +1,6 @@
 [project]
 name = "ffdraft-mcp"
-version = "1.0.0"
+version = "1.1.0"
 description = "Live fantasy football draft analyst as an MCP server"
 readme = "README.md"
 requires-python = ">=3.10"
