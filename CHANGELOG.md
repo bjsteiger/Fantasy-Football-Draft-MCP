@@ -6,6 +6,8 @@ All notable changes to this project. Format follows
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-08-30
+
 ### Fixed
 
 **`prewarm` actually warms the IDP path** ([#44](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/44))
@@ -81,6 +83,21 @@ All notable changes to this project. Format follows
   replacement levels — and says whether it created a new league or updated an
   existing one. Merging means a short call can inherit settings from months ago,
   so the output has to show what the league actually is, not what you typed.
+
+**`league_id` accepts a number, and a failed `prewarm` step says why**
+([#38](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/38),
+[#39](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/39))
+- Every ESPN league id is digits, so a client serialising JSON faithfully sent a
+  number and the `str` annotation rejected it before the tool body ran. Quoting
+  it was worse: nothing normalised the id, so `"1431833696"` reached the ESPN URL
+  as `%221431833696%22` and came back an opaque 400. Tools now take `str | int`
+  and normalise once at the boundary, validating before the id can reach a URL.
+- `prewarm` kept only the exception class, so a failed defender board read
+  `failed: HTTPError` — one word covering a malformed id, expired cookies, a
+  league you cannot see, and ESPN being down. The message is kept now, truncated
+  so a stray HTML error page cannot swamp the response.
+- Shipped in #40; recorded here because that PR added no changelog entry of its
+  own and the work is part of this release.
 
 ## [1.2.0] — 2026-08-30
 
