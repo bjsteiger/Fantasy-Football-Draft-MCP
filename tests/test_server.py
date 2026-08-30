@@ -4,11 +4,15 @@ drafted-flagging, and the pointer that sends defender questions to idp_report.
 The tools themselves drive the whole board pipeline, so only the helpers that
 stand on their own are covered here -- offline like the rest of the suite.
 """
+import json
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
+import pytest
 
 from ffdraft import server, sources
-from ffdraft.config import LeagueSettings, Scoring
+from ffdraft.config import LeagueSettings, ModelWeights, Scoring
 
 
 class TestScoringLabel:
@@ -148,3 +152,85 @@ class TestIdpPointer:
 
     def test_no_name_and_no_position_is_not_a_redirect(self):
         assert server._idp_pointer() is None
+
+
+class TestConfigureLeague:
+    """Reconfiguring a league must not undo model tuning (issue #32).
+
+    `configure_league` built a fresh `ModelWeights` on every call, so every
+    weight it does not take as a parameter -- schedule, injury, oline, td_luck,
+    qb_boost -- snapped back to its default the moment anyone reconfigured the
+    league to change `idp`, `rounds` or `draft_slot`. Nothing in the response
+    said so. The store is faked here so the suite stays offline and never
+    touches the real leagues.json.
+    """
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        saved: dict[str, tuple] = {}
+
+        def fake_load(name=None):
+            entry = saved.get(name)
+            if entry is None:
+                return LeagueSettings(), ModelWeights()
+            league, weights = entry
+            return replace(league), replace(weights)
+
+        def fake_save(league, weights, make_active=True):
+            saved[league.name] = (replace(league), replace(weights))
+
+        monkeypatch.setattr(server, "load_settings", fake_load)
+        monkeypatch.setattr(server, "save_settings", fake_save)
+        monkeypatch.setattr(server, "cfg_list_leagues", lambda: (sorted(saved), None))
+        monkeypatch.setitem(server._CACHE, "league", None)
+        monkeypatch.setitem(server._CACHE, "weights", None)
+        return saved
+
+    def test_tuned_weights_survive_a_reconfigure(self, store):
+        # The exact sequence from the issue: tune via model_settings, then call
+        # configure_league again to change one league-shape setting.
+        tuned = ModelWeights(schedule=0.0, injury=0.2, qb_boost=0.12)
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10), tuned)
+
+        server.configure_league(name="rudy", teams=10, idp=1)
+
+        _, weights = store["rudy"]
+        assert weights.schedule == 0.0
+        assert weights.injury == 0.2
+        assert weights.qb_boost == 0.12
+
+    def test_an_omitted_consistency_weight_keeps_the_tuned_one(self, store):
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10),
+                         ModelWeights(consistency_weight=0.6))
+
+        server.configure_league(name="rudy", teams=10, idp=1)
+
+        assert store["rudy"][1].consistency_weight == 0.6
+
+    def test_an_explicit_consistency_weight_is_still_applied(self, store):
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10),
+                         ModelWeights(consistency_weight=0.6, schedule=0.0))
+
+        server.configure_league(name="rudy", teams=10, consistency_weight=0.1)
+
+        weights = store["rudy"][1]
+        assert weights.consistency_weight == 0.1
+        assert weights.schedule == 0.0   # the rest still carries over
+
+    def test_a_new_league_starts_from_defaults(self, store):
+        # A name that has never been configured must not inherit another
+        # league's tuning -- separate leagues keep separate models.
+        store["rudy"] = (LeagueSettings(name="rudy"), ModelWeights(schedule=0.0))
+
+        server.configure_league(name="brand_new", teams=12)
+
+        assert store["brand_new"][1].schedule == ModelWeights().schedule
+
+    def test_the_response_says_what_the_weights_are(self, store):
+        store["rudy"] = (LeagueSettings(name="rudy", teams=10),
+                         ModelWeights(schedule=0.0))
+
+        out = json.loads(server.configure_league(name="rudy", teams=10, idp=1))
+
+        assert out["weights"]["schedule"] == 0.0
+        assert out["weights"]["consistency_weight"] == ModelWeights().consistency_weight

@@ -21,7 +21,7 @@ Create or update a named league and make it active.
 round arithmetic is right; defensive players are not projected. |
 | `superflex` | 0 | Slots where a QB may also start. |
 | `te_premium_bonus` | 0.0 | Extra points per TE reception. |
-| `consistency_weight` | 0.35 | 0 = pure upside, 1 = pure floor. |
+| `consistency_weight` | unchanged | 0 = pure upside, 1 = pure floor. Omit it and an existing league keeps its tuned value (0.35 for a new one). Every other weight is preserved either way — reconfiguring a league never undoes `model_settings` tuning. |
 | `adp_csv_path` | — | Your platform's ADP export. Beats consensus. |
 
 ### `list_leagues` / `switch_league` / `remove_league`

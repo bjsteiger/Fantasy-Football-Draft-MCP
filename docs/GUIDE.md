@@ -152,7 +152,7 @@ configure_league(
 | `idp` | 0 | Individual defensive player slots — LB, DL, DB, edge, or a generic defensive flex. Set it if your league starts defenders; rank them with `idp_report`. |
 | `superflex` | 0 | Extra slots where a QB may also start. Shifts replacement level and roster-need logic — quarterbacks become genuinely scarce. |
 | `te_premium_bonus` | 0.0 | Extra fantasy points per TE reception, on top of `scoring`. |
-| `consistency_weight` | 0.35 | 0 = pure expected points (upside), 1 = pure week-to-week reliability (floor). |
+| `consistency_weight` | 0.35 for a new league, unchanged for an existing one | 0 = pure expected points (upside), 1 = pure week-to-week reliability (floor). Omitting it leaves the league's current value alone; the other model weights (`schedule`, `injury`, `oline`, `td_luck`, `qb_boost`…) are always preserved, so reconfiguring a league to change `idp` or `rounds` does not undo tuning done with `model_settings`. |
 | `adp_csv_path` | — | Path to your platform's ADP export, if you want it instead of consensus ECR. |
 
 You can hold as many leagues as you like side by side:
@@ -267,7 +267,9 @@ A typical `who_should_i_pick` answer:
 ### Setup & league management
 
 **`configure_league(name, teams, draft_slot, rounds, scoring, snake, qb, rb, wr, te, flex, idp, superflex, te_premium_bonus, consistency_weight, adp_csv_path)`**
-Create or update a named league; makes it active. See the table in §5.
+Create or update a named league; makes it active. See the table in §5. Updating an
+existing league keeps its model weights — including `consistency_weight` when you
+don't pass one — so changing the league's shape never resets tuning.
 
 **`list_leagues()`**
 Every league you've set up, which is active, teams/scoring/slot/superflex, and how
