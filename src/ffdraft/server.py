@@ -62,6 +62,54 @@ def _board_path(league: LeagueSettings, weights: ModelWeights) -> Path:
 
 # ---------------------------------------------------------------- internals
 
+class LeagueIdError(ValueError):
+    """A league id that cannot be used, caught at the tool boundary."""
+
+
+def _league_id(value: str | int | None) -> str | None:
+    """Normalise a league id arriving from any MCP client.
+
+    League ids are digit-only, so a client serialising JSON faithfully sends a
+    number rather than a string. A strict `str` annotation rejects that before
+    the tool body ever runs, and the obvious recovery -- quoting the value --
+    used to be worse: nothing normalised the id, so `"1431833696"` was
+    interpolated into the ESPN URL as `%221431833696%22` and came back an
+    opaque 400. Both are the caller doing something reasonable, so accept both
+    and strip the quoting rather than making them guess.
+
+    Validated here, before the id reaches a URL, so a malformed one says what is
+    wrong instead of surfacing as an HTTP error. Every consumer is an ESPN
+    endpoint (`espn_scoring_items`, `sync_espn`, `espn_league_context`) and ESPN
+    ids are digits, so that check is safe.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().strip("\"'").strip()
+    if not text:
+        return None
+    if not text.isdigit():
+        raise LeagueIdError(
+            f"league_id must be digits, got {text!r} -- it is the number in "
+            "your league's URL, e.g. .../leagues/1431833696"
+        )
+    return text
+
+
+def _step_failure(exc: Exception) -> str:
+    """Describe a failed prewarm step.
+
+    The class name alone had to cover a malformed league id, expired
+    espn_s2/SWID cookies, a league the logged-in user can't see, and ESPN being
+    down -- four problems with four different fixes, reported as one word.
+    prewarm is meant to be run shortly before a draft, which is exactly when an
+    unactionable diagnosis costs the most, so keep the message. Truncated
+    because a stray HTML error page would otherwise swamp the response.
+    """
+    detail = str(exc).strip()
+    return (f"failed: {type(exc).__name__}: {detail[:200]}"
+            if detail else f"failed: {type(exc).__name__}")
+
+
 def _settings() -> tuple[LeagueSettings, ModelWeights]:
     if _CACHE["league"] is None:
         _CACHE["league"], _CACHE["weights"] = load_settings()
@@ -468,12 +516,16 @@ def best_available(position: str | None = None, limit: int = 15,
 
 
 @mcp.tool()
-def who_should_i_pick(limit: int = 6, league_id: str | None = None) -> str:
+def who_should_i_pick(limit: int = 6, league_id: str | int | None = None) -> str:
     """The live draft-analyst call: who to take right now, and why.
 
     Weighs projected value, week-to-week consistency, your roster's open starting
     slots, and the odds each player survives to your next pick.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     league, _ = _settings()
     state = _state()
     b = _mark_drafted(_build_board(), state)
@@ -529,7 +581,7 @@ def record_pick(player_name: str, overall_pick: int | None = None,
 
 
 @mcp.tool()
-def sync_draft(platform: str, league_id: str | None = None, draft_id: str | None = None,
+def sync_draft(platform: str, league_id: str | int | None = None, draft_id: str | None = None,
                pasted_board: str | None = None, season: int = CURRENT_SEASON) -> str:
     """Pull the current draft board from your platform.
 
@@ -538,6 +590,10 @@ def sync_draft(platform: str, league_id: str | None = None, draft_id: str | None
       ESPN_SWID and ESPN_S2 environment variables from a logged-in browser session.
     platform="paste" with pasted_board -- paste the drafted list from any site.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     state = _state()
     b = _build_board()
     platform = platform.lower()
@@ -738,7 +794,7 @@ def value_picks(limit: int = 20, direction: str = "undervalued") -> str:
 
 
 @mcp.tool()
-def on_the_clock(platform: str, league_id: str | None = None, draft_id: str | None = None,
+def on_the_clock(platform: str, league_id: str | int | None = None, draft_id: str | None = None,
                  pasted_board: str | None = None, season: int = CURRENT_SEASON,
                  limit: int = 6) -> str:
     """The full on-the-clock workflow in one call: sync, status, pick, value, matchup.
@@ -755,6 +811,10 @@ def on_the_clock(platform: str, league_id: str | None = None, draft_id: str | No
     want the full picture in one shot. platform/league_id/draft_id/pasted_board/season
     are exactly sync_draft's arguments.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     sync = json.loads(sync_draft(platform, league_id, draft_id, pasted_board, season))
     if "error" in sync:
         return json.dumps({"step": "sync_draft", **sync}, indent=2)
@@ -909,7 +969,7 @@ def redzone_shift_backtest(seasons: str = "2022,2023,2024,2025", position: str =
 
 
 @mcp.tool()
-def draft_backtest(league_id: str, season: int, top_n: int = 3) -> str:
+def draft_backtest(league_id: str | int, season: int, top_n: int = 3) -> str:
     """Replay a real past ESPN draft: the algorithm's pick, the true hindsight-best
     pick, and what you actually took, round by round.
 
@@ -932,6 +992,10 @@ def draft_backtest(league_id: str, season: int, top_n: int = 3) -> str:
     K/DST aren't modelled anywhere in this tool, so those rounds report your
     actual pick only, same as everywhere else. Only ESPN is supported.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     out = adp_mod.draft_backtest(league_id, season, top_n=top_n)
     return json.dumps(out, indent=2, default=str)
 
@@ -973,7 +1037,8 @@ def mock_draft(season: int, n_trials: int = 30, top_n: int = 5) -> str:
 
 
 @mcp.tool()
-def champion_strategies(league_id: str, seasons: str = "2020,2021,2022,2023,2024,2025") -> str:
+def champion_strategies(league_id: str | int,
+                        seasons: str = "2020,2021,2022,2023,2024,2025") -> str:
     """What actually won your ESPN league, season by season, and which specific
     pick made the difference.
 
@@ -996,6 +1061,10 @@ def champion_strategies(league_id: str, seasons: str = "2020,2021,2022,2023,2024
     ECR history only goes back to 2020 -- seasons before that get position and
     timing data but no value verdicts or steal context. ESPN only.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     yrs = [int(s) for s in seasons.split(",") if s.strip()]
     out = adp_mod.champion_strategies(league_id, yrs)
     return json.dumps(out, indent=2, default=str)
@@ -1080,7 +1149,7 @@ def resolve_names(names_csv: str) -> str:
 
 
 @mcp.tool()
-def prewarm(verbose: bool = True, league_id: str | None = None) -> str:
+def prewarm(verbose: bool = True, league_id: str | int | None = None) -> str:
     """Build every cache before draft day so nothing computes while you're on the clock.
 
     The first query of a session pays for downloading and modelling five seasons.
@@ -1092,6 +1161,10 @@ def prewarm(verbose: bool = True, league_id: str | None = None) -> str:
     scoring and there is no safe default -- tackles alone range from 0.5 to 2
     points between leagues.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     import time as _time
 
     timings, t0 = {}, _time.time()
@@ -1129,7 +1202,7 @@ def prewarm(verbose: bool = True, league_id: str | None = None) -> str:
             fn()
             timings[name] = round(_time.time() - s, 2)
         except Exception as exc:
-            timings[name] = f"failed: {type(exc).__name__}"
+            timings[name] = _step_failure(exc)
 
     b = _build_board()
     out = {
@@ -1268,13 +1341,17 @@ def defense_report(position: str = "RB", limit: int = 32) -> str:
 
 
 @mcp.tool()
-def plan_my_draft(strategy: str = "balanced", league_id: str | None = None) -> str:
+def plan_my_draft(strategy: str = "balanced", league_id: str | int | None = None) -> str:
     """Simulate your whole draft from your slot and return the projected lineup.
 
     Runs the board forward pick by pick, using ADP to model who realistically falls
     to you at each turn, and applies the same recommendation logic at every stop.
     strategy: balanced, zero_rb, hero_rb, or robust_rb.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     league, weights = _settings()
     state = _state()
     b = _mark_drafted(_build_board(), state).copy()
@@ -1338,7 +1415,7 @@ def plan_my_draft(strategy: str = "balanced", league_id: str | None = None) -> s
 
 
 @mcp.tool()
-def idp_report(league_id: str | None = None, season: int | None = None,
+def idp_report(league_id: str | int | None = None, season: int | None = None,
                limit: int = 15, position: str | None = None,
                min_games: int = 8, timing_seasons: str | None = None) -> str:
     """Rank individual defensive players for a league with an IDP roster slot.
@@ -1371,6 +1448,10 @@ def idp_report(league_id: str | None = None, season: int | None = None,
     defender goes when is close to noise. How many are gone by a given pick is
     the part that holds.
     """
+    try:
+        league_id = _league_id(league_id)
+    except LeagueIdError as exc:
+        return json.dumps({"error": str(exc)}, indent=2)
     from . import idp as idp_mod
 
     if not league_id:
