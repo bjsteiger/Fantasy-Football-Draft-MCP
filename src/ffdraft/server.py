@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -304,7 +305,7 @@ def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6
                      rounds: int = 16, scoring: str = "half_ppr", snake: bool = True,
                      qb: int = 1, rb: int = 2, wr: int = 2, te: int = 1, flex: int = 1,
                      idp: int = 0, superflex: int = 0, te_premium_bonus: float = 0.0,
-                     consistency_weight: float = 0.35,
+                     consistency_weight: float | None = None,
                      adp_csv_path: str | None = None) -> str:
     """Create or update a league, and make it the active one.
 
@@ -315,7 +316,10 @@ def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6
     scoring: ppr, half_ppr, or standard. Use superflex=1 for a second QB-eligible
     slot, and te_premium_bonus for extra points per tight end reception.
     consistency_weight trades expected points against week-to-week reliability
-    (0 = pure upside, 1 = pure floor).
+    (0 = pure upside, 1 = pure floor). Leave it out and an existing league keeps
+    whatever it is already tuned to; every other model weight is preserved
+    either way, so reconfiguring the league's shape never silently undoes
+    tuning done through model_settings.
 
     idp is how many individual defensive player slots the league starts (a
     linebacker, defensive back, edge rusher, or a generic defensive-player
@@ -333,7 +337,16 @@ def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6
         scoring=Scoring.preset(scoring), starters=starters,
         superflex=superflex, te_premium_bonus=te_premium_bonus,
     )
-    weights = ModelWeights(consistency_weight=consistency_weight)
+    # Start from the weights this league already has rather than a fresh
+    # ModelWeights. Building a new one reset every weight the dataclass defaults
+    # -- schedule, injury, oline, td_luck, qb_boost -- back to its default on
+    # every call, so reconfiguring a league just to change `idp` or `rounds`
+    # silently threw away tuning done through model_settings, with nothing in
+    # the response to say so. An unknown name still loads defaults, so a new
+    # league is unaffected. See issue #32.
+    _, weights = load_settings(name)
+    if consistency_weight is not None:
+        weights.consistency_weight = float(consistency_weight)
     save_settings(league, weights)
 
     csvs = dict(_CACHE.get("adp_csv") or {})
@@ -349,6 +362,10 @@ def configure_league(name: str = "default", teams: int = 12, draft_slot: int = 6
         "your_picks": league.picks_for_slot()[:rounds],
         "replacement_levels": league.replacement_ranks(),
         "all_leagues": known,
+        # Echoed so a reconfigure shows what the model is actually tuned to.
+        # The reset in issue #32 was invisible partly because this response
+        # never mentioned weights at all.
+        "weights": asdict(weights),
         "board": "already cached for these settings" if reused
                  else "will build on your next query",
     }, indent=2)

@@ -238,12 +238,14 @@ Reopen only with access to a real DL/DB league's payload, where the slot ids in
 ## Known issues found outside this list
 
 - [Issue #32](https://github.com/bjsteiger/Fantasy-Football-Draft-MCP/issues/32)
-  -- `configure_league` rebuilds `ModelWeights` from scratch on every call, so
-  any tuned weight other than `consistency_weight` (schedule, injury, oline,
-  td_luck, qb_boost...) silently resets to its default the next time
-  `configure_league` runs for an existing league, including just to change
+  *(fixed)* -- `configure_league` rebuilt `ModelWeights` from scratch on every
+  call, so any tuned weight other than `consistency_weight` (schedule, injury,
+  oline, td_luck, qb_boost...) silently reset to its default the next time
+  `configure_league` ran for an existing league, including just to change
   `idp`/`rounds`/`draft_slot`. Not IDP-specific, but found while auditing this
-  work. `model_settings` itself is unaffected.
+  work. `model_settings` itself was unaffected. It now loads the league's
+  existing weights and overwrites only `consistency_weight`, and only when
+  passed; the response echoes `weights` so a reset could not be silent again.
 
 ## Reference
 
