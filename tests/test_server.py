@@ -234,3 +234,67 @@ class TestConfigureLeague:
 
         assert out["weights"]["schedule"] == 0.0
         assert out["weights"]["consistency_weight"] == ModelWeights().consistency_weight
+class TestLeagueId:
+    """Normalising the league id at the tool boundary (issue #38)."""
+
+    def test_an_integer_is_accepted(self):
+        # Every league id is digit-only, so a client serialising JSON faithfully
+        # sends a number. Rejecting that put the burden on the caller.
+        assert server._league_id(1431833696) == "1431833696"
+
+    def test_a_plain_string_passes_through(self):
+        assert server._league_id("1431833696") == "1431833696"
+
+    def test_surrounding_quotes_are_stripped(self):
+        # What a caller reaches for after a string-type rejection. Left alone,
+        # this reached the ESPN URL as %221431833696%22 and returned a bare 400.
+        assert server._league_id('"1431833696"') == "1431833696"
+        assert server._league_id("'1431833696'") == "1431833696"
+
+    def test_surrounding_whitespace_is_stripped(self):
+        assert server._league_id("  1431833696  ") == "1431833696"
+
+    def test_quotes_and_whitespace_together_are_stripped(self):
+        assert server._league_id('  "1431833696"  ') == "1431833696"
+
+    def test_none_stays_none(self):
+        assert server._league_id(None) is None
+
+    def test_an_empty_or_blank_id_reads_as_absent(self):
+        # Tools already have a "league_id required" branch; blank should land
+        # there rather than being sent to ESPN as an empty path segment.
+        assert server._league_id("") is None
+        assert server._league_id("   ") is None
+        assert server._league_id('""') is None
+
+    def test_a_non_numeric_id_is_rejected_before_it_reaches_a_url(self):
+        with pytest.raises(server.LeagueIdError) as exc:
+            server._league_id("not-a-league")
+        assert "digits" in str(exc.value)
+
+    def test_a_url_pasted_instead_of_an_id_is_rejected(self):
+        with pytest.raises(server.LeagueIdError):
+            server._league_id("https://fantasy.espn.com/football/league?leagueId=1431833696")
+
+    def test_the_rejection_names_the_offending_value(self):
+        with pytest.raises(server.LeagueIdError) as exc:
+            server._league_id("abc123")
+        assert "abc123" in str(exc.value)
+
+
+class TestPrewarmStepFailures:
+    """prewarm keeping the exception message, not just its class (issue #39)."""
+
+    def test_a_failed_step_reports_the_message_not_just_the_class(self):
+        detail = "401 Client Error: Unauthorized for url: https://example.test"
+        out = server._step_failure(RuntimeError(detail))
+        assert "RuntimeError" in out
+        assert "401" in out and "Unauthorized" in out
+
+    def test_a_long_message_is_truncated(self):
+        out = server._step_failure(RuntimeError("x" * 500))
+        assert len(out) < 260
+
+    def test_a_message_less_exception_still_names_the_class(self):
+        out = server._step_failure(RuntimeError())
+        assert out == "failed: RuntimeError"
