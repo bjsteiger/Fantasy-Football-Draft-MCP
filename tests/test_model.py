@@ -1,13 +1,17 @@
 """Draft logic: survival probability, roster need, and scoring-format conversion."""
 import numpy as np
 import pandas as pd
+import pytest
 
 from ffdraft.board import FORMAT_SHIFT_DAMPING, convert_adp_format, synthetic_adp
 from ffdraft.config import LeagueSettings
 from ffdraft.model import (
     _positional_need,
+    _season_weighted,
     apply_current_team,
     expected_best_at_next_pick,
+    explain,
+    recommend,
     survival_probability,
     survival_probability_vec,
     touchdown_luck_multiplier,
@@ -275,3 +279,246 @@ class TestFormatConversion:
         b = self._board().drop(columns=[])
         out = convert_adp_format(b, "standard")
         assert out["adp"].equals(b["adp"])
+
+
+class TestSeasonWeighted:
+    def test_the_recent_season_carries_more_weight(self):
+        profiles = pd.DataFrame([
+            {"player_id": "p1", "season": 2023, "v": 0.0},
+            {"player_id": "p1", "season": 2024, "v": 1.0},
+        ])
+        # Two seasons draw weights 0.28 and 0.40, so an improving player lands
+        # above the midpoint of his two values.
+        assert _season_weighted(profiles, "v").loc["p1"] == pytest.approx(0.40 / 0.68)
+
+    def test_one_row_per_player(self):
+        profiles = pd.DataFrame([
+            {"player_id": "p1", "season": 2023, "v": 1.0},
+            {"player_id": "p1", "season": 2024, "v": 1.0},
+            {"player_id": "p2", "season": 2024, "v": 2.0},
+        ])
+        out = _season_weighted(profiles, "v")
+        assert len(out) == 2
+        assert out.loc["p2"] == pytest.approx(2.0)
+
+    def test_a_season_with_no_value_counts_as_a_zero(self):
+        # Unlike separation_summary, a missing value here is folded in as zero
+        # rather than skipped: the denominator still carries that season's
+        # weight, so a player who produced nothing in a season is pulled down
+        # by it instead of being judged only on the seasons he showed up.
+        profiles = pd.DataFrame([
+            {"player_id": "p1", "season": 2023, "v": np.nan},
+            {"player_id": "p1", "season": 2024, "v": 1.0},
+        ])
+        assert _season_weighted(profiles, "v").loc["p1"] == pytest.approx(0.40 / 0.68)
+
+
+def _cand(name, position="RB", draft_score=100.0, adp=10.0, drafted=False, **extra):
+    row = {"name": name, "position": position, "draft_score": draft_score,
+           "adp": adp, "drafted": drafted}
+    row.update(extra)
+    return row
+
+
+class TestRecommend:
+    def test_drafted_players_are_not_recommended(self):
+        b = pd.DataFrame([_cand("Gone", drafted=True),
+                          _cand("Available", drafted=False)])
+        out = recommend(b, LeagueSettings(), current_pick=1, next_pick=24)
+        assert list(out["name"]) == ["Available"]
+
+    def test_an_empty_board_returns_empty(self):
+        b = pd.DataFrame(columns=["name", "position", "draft_score", "adp", "drafted"])
+        assert recommend(b, LeagueSettings(), current_pick=1, next_pick=24).empty
+
+    def test_top_n_caps_the_list(self):
+        b = pd.DataFrame([_cand(f"Player {i}", draft_score=100.0 - i)
+                          for i in range(20)])
+        out = recommend(b, LeagueSettings(), current_pick=1, next_pick=24, top_n=5)
+        assert len(out) == 5
+
+    def test_results_come_back_ranked_by_pick_value(self):
+        b = pd.DataFrame([_cand(f"Player {i}", draft_score=100.0 - i)
+                          for i in range(6)])
+        out = recommend(b, LeagueSettings(), current_pick=1, next_pick=24)
+        assert list(out["pick_value"]) == sorted(out["pick_value"], reverse=True)
+
+    def test_your_last_pick_treats_nobody_as_surviving(self):
+        # With no next pick there is no waiting, so every survival chance is zero
+        # and urgency is total.
+        b = pd.DataFrame([_cand("A Back", adp=200.0)])
+        out = recommend(b, LeagueSettings(), current_pick=1, next_pick=None)
+        assert out["p_available_next"].iloc[0] == 0.0
+        assert out["urgency"].iloc[0] == 1.0
+
+    def test_a_player_certain_to_survive_is_worth_less_now(self):
+        # Opportunity cost: two equally good backs, one of whom will still be
+        # there at your next turn, should not be valued the same right now.
+        b = pd.DataFrame([
+            _cand("Goes Now", adp=1.0, draft_score=100.0),
+            _cand("Lasts", position="WR", adp=250.0, draft_score=100.0),
+        ])
+        out = recommend(b, LeagueSettings(), current_pick=2, next_pick=23
+                        ).set_index("name")
+        assert out.loc["Lasts", "p_available_next"] > out.loc["Goes Now",
+                                                              "p_available_next"]
+        assert out.loc["Goes Now", "urgency"] > out.loc["Lasts", "urgency"]
+
+    def test_a_full_position_is_discounted_against_an_open_slot(self):
+        # Same projection, but one position still has a starting slot open and
+        # the other is capped out.
+        b = pd.DataFrame([_cand("Back", position="RB", draft_score=100.0),
+                          _cand("Passer", position="QB", draft_score=100.0)])
+        roster = {"QB": 2, "RB": 0}      # QB at ROSTER_CAP, RB empty
+        out = recommend(b, LeagueSettings(), current_pick=1, next_pick=24,
+                        roster=roster).set_index("name")
+        assert out.loc["Back", "need_mult"] > out.loc["Passer", "need_mult"]
+        assert out.loc["Back", "pick_value"] > out.loc["Passer", "pick_value"]
+
+    def test_a_board_without_a_drafted_column_is_all_available(self):
+        b = pd.DataFrame([{"name": "A Back", "position": "RB",
+                           "draft_score": 100.0, "adp": 10.0}])
+        assert len(recommend(b, LeagueSettings(), current_pick=1, next_pick=24)) == 1
+
+
+class TestExplain:
+    def _row(self, **kw):
+        base = {"position": "RB", "pos_rank": 3, "proj_points": 240.0,
+                "adj_ppg": 15.2}
+        base.update(kw)
+        return pd.Series(base)
+
+    def test_leads_with_positional_rank_and_projection(self):
+        out = explain(self._row())
+        assert "RB3 by projection" in out
+        assert "240 pts" in out
+
+    def test_a_multiplier_near_one_is_not_mentioned(self):
+        # Everything within 2% of neutral is noise; listing it would bury the
+        # factors that actually moved the projection.
+        assert "O-line" not in explain(self._row(m_oline=1.01))
+
+    def test_a_meaningful_multiplier_is_reported_with_its_direction(self):
+        out = explain(self._row(m_oline=1.15, m_td_luck=0.80))
+        assert "O-line +15.0%" in out
+        assert "touchdown regression -20.0%" in out
+
+    def test_survival_chance_is_reported_when_known(self):
+        assert "60% chance he lasts" in explain(self._row(p_available_next=0.6))
+
+    def test_a_sparse_row_still_produces_a_string(self):
+        # explain() runs on rows from several different frames, not all of which
+        # carry every column.
+        assert isinstance(explain(pd.Series({"position": "RB"})), str)
+
+
+def _proj_row(name, position="RB", fp_mean=12.0, **kw):
+    """A full feature row for project(). Defaults are deliberately neutral so a
+    test can move one input and read the effect of that input alone."""
+    row = {
+        "player_id": f"id-{name}", "name": name, "position": position,
+        "team": "BUF", "fp_mean": fp_mean, "fp_cv": 0.35,
+        "games_last": 17.0, "seasons_played": 3.0, "last_season": 2025,
+        "age": 26.0, "exp_games": 16.0, "injury_risk": 0.10,
+        "consistency_sample_games": 17.0,
+        "rz_touches": 20.0, "rz_td": 4.0, "rz_baseline_rate": 0.20,
+        "run_block_z": 0.0, "pass_block_z": 0.0,
+        "plays_per_game": 64.0, "neutral_pass_rate": 0.55, "rush_rate": 0.43,
+        "divisional_games": 6.0, "rec_per_game": 3.0,
+        # weekly-distribution inputs, produced upstream by build_player_table
+        "floor": 8.0, "startable_rate": 0.55, "rookie_consistency": np.nan,
+    }
+    row.update(kw)
+    return row
+
+
+def _projected(*rows, league=None, weights=None):
+    from ffdraft.config import ModelWeights
+    from ffdraft.model import project
+    return project(pd.DataFrame(list(rows)), league or LeagueSettings(),
+                   weights or ModelWeights()).set_index("name")
+
+
+def _field(n=12, position="RB", **kw):
+    """A spread of comparable players, so cross-sectional z-scores have a
+    population to work against."""
+    return [_proj_row(f"Filler {i}", position=position, fp_mean=8.0 + i * 0.5, **kw)
+            for i in range(n)]
+
+
+class TestProjectBaseline:
+    def test_a_projection_and_a_draft_score_come_out(self):
+        out = _projected(_proj_row("A Back"), *_field())
+        assert np.isfinite(out.loc["A Back", "proj_points"])
+        assert np.isfinite(out.loc["A Back", "draft_score"])
+
+    def test_a_small_sample_is_regressed_toward_the_positional_target(self):
+        # Two games of hot form is not a season. The regressed baseline must sit
+        # well below the raw average, or a cameo outranks a proven starter.
+        hot = _proj_row("Two Game Wonder", fp_mean=30.0, games_last=2.0,
+                        seasons_played=1.0)
+        proven = _proj_row("Proven Starter", fp_mean=18.0, games_last=17.0,
+                           seasons_played=5.0)
+        out = _projected(hot, proven, *_field())
+        assert out.loc["Two Game Wonder", "baseline_ppg"] < 30.0
+        assert out.loc["Proven Starter", "baseline_ppg"] > out.loc[
+            "Two Game Wonder", "baseline_ppg"]
+
+    def test_a_stale_veteran_is_discounted_hard(self):
+        # A two-seasons-retired back's still-strong old form once outprojected a
+        # real board and became the runaway top recommendation.
+        fresh = _proj_row("Still Playing", fp_mean=18.0, last_season=2025)
+        stale = _proj_row("Long Retired", fp_mean=18.0, last_season=2023)
+        out = _projected(fresh, stale, *_field())
+        assert out.loc["Long Retired", "baseline_ppg"] < 0.25 * out.loc[
+            "Still Playing", "baseline_ppg"]
+
+    def test_the_regression_target_is_starter_caliber_not_everyone(self):
+        # Including third-stringers would drag the target down far enough that
+        # regressing toward it cuts a genuine RB1 by a third.
+        starters = [_proj_row(f"Starter {i}", fp_mean=16.0 + i * 0.2)
+                    for i in range(10)]
+        scrubs = [_proj_row(f"Scrub {i}", fp_mean=0.5) for i in range(60)]
+        out = _projected(*starters, *scrubs)
+        assert out.loc["Starter 0", "pos_target"] > 5.0
+
+
+class TestProjectRookies:
+    def test_a_rookie_keeps_its_capital_fitted_baseline(self):
+        # The veteran regression would replace it with a positional average and
+        # erase the whole distinction between a top-five pick and a sixth-rounder.
+        early = _proj_row("Early Rookie", fp_mean=np.nan, games_last=0.0,
+                          seasons_played=0.0, last_season=np.nan,
+                          is_rookie=True, baseline_ppg=14.0, age=22.0)
+        late = _proj_row("Late Rookie", fp_mean=np.nan, games_last=0.0,
+                         seasons_played=0.0, last_season=np.nan,
+                         is_rookie=True, baseline_ppg=4.0, age=22.0)
+        out = _projected(early, late, *_field())
+        assert out.loc["Early Rookie", "baseline_ppg"] == pytest.approx(14.0)
+        assert out.loc["Late Rookie", "baseline_ppg"] == pytest.approx(4.0)
+
+    def test_a_rookie_is_not_treated_as_stale(self):
+        # Rookies have no last_season; the staleness discount must not fire on
+        # them or every rookie collapses to nearly zero.
+        rook = _proj_row("A Rookie", fp_mean=np.nan, games_last=0.0,
+                         seasons_played=0.0, last_season=np.nan,
+                         is_rookie=True, baseline_ppg=12.0)
+        out = _projected(rook, *_field())
+        assert out.loc["A Rookie", "baseline_ppg"] == pytest.approx(12.0)
+
+
+class TestProjectRanking:
+    def test_positional_and_overall_ranks_are_assigned(self):
+        out = _projected(*_field(n=6), *_field(n=6, position="WR"))
+        assert set(out["pos_rank"]) >= {1, 2, 3}
+        assert out["overall_rank"].min() == 1
+
+    def test_vor_is_value_over_the_replacement_level_player(self):
+        out = _projected(*_field(n=30))
+        assert (out["vor"] == out["proj_points"] - out["replacement_points"]).all()
+
+    def test_the_best_player_at_a_position_ranks_first(self):
+        rows = _field(n=10)
+        best = _proj_row("Clear Best", fp_mean=30.0)
+        out = _projected(best, *rows)
+        assert out.loc["Clear Best", "pos_rank"] == 1
